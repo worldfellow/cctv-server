@@ -1,0 +1,66 @@
+[
+    {
+        "id": "1",
+        "name": "Main Entrance",
+        "location": "Gate A - North",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "2",
+        "name": "Parking Lot B",
+        "location": "Level 1 - Section 4",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "3",
+        "name": "Server Room",
+        "location": "Data Center - Floor 2",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1558494949-ef010cbdcc48?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "4",
+        "name": "Lobby East",
+        "location": "Reception Area",
+        "status": "offline",
+        "thumbnail": "https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": null
+    },
+    {
+        "id": "5",
+        "name": "Cafeteria",
+        "location": "Food Court - West",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1556742044-3c52d6e88102?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "6",
+        "name": "Warehouse 4",
+        "location": "Storage Unit - South",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "7",
+        "name": "Executive Office",
+        "location": "Floor 12 - Suite A",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1497366811353-6870744d04b2?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    },
+    {
+        "id": "8",
+        "name": "Roof Access",
+        "location": "Terrace North",
+        "status": "online",
+        "thumbnail": "https://images.unsplash.com/photo-1503387762-592dea58ef23?q=80&w=800&auto=format&fit=crop",
+        "streamUrl": "https://sample.vodobox.net/skate_phantom_flex_4k/skate_phantom_flex_4k.m3u8"
+    }
+]

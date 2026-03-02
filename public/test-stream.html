@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCTV WebSocket Stream Test</title>
+    <!-- Include jsmpeg library -->
+    <script src="https://jsmpeg.com/jsmpeg.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        canvas {
+            display: block;
+            background-color: #000;
+            width: 800px;
+            height: 450px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>CCTV Real-Time Stream</h1>
+    <p>This is a test page demonstrating the sub-second latency MPEG1 over WebSocket feed.</p>
+    
+    <!-- 
+        Instead of <video [src]="feed.streamUrl"> 
+        You use a plain <canvas> element to render the feed!
+    -->
+    <canvas id="video-canvas"></canvas>
+
+    <script>
+        // 1. You would first call the backend API to start the proxy and get the port
+        // POST /api/cameras/123/start-stream
+        // Response => { wsUrl: 'ws://localhost:9999' }
+
+        // Hardcoded example for demonstration purposes (replace with wsUrl from API):
+        const wsUrl = 'ws://127.0.0.1:9999';
+
+        const canvas = document.getElementById('video-canvas');
+        
+        // 2. Initialize the jsmpeg player targeting that canvas
+        // This connects to the node-rtsp-stream WebSocket and renders the video
+        let player;
+        try {
+            player = new JSMpeg.Player(wsUrl, {
+                canvas: canvas,
+                autoplay: true,
+                audio: false // Usually RTSP camera audio over WS needs specific tuning
+            });
+            console.log('JSMpeg player initialized successfully.');
+        } catch (e) {
+            console.error('Failed to initialize JSMpeg player:', e);
+            document.body.innerHTML += '<p style="color:red;">Error: Make sure the backend proxy is actually running on port 9999 and providing a stream.</p>';
+        }
+    </script>
+</body>
+</html>
