@@ -22,6 +22,12 @@ router.get('/', authMiddleware, async (req, res) => {
             whereClause.isActive = true;
         }
 
+        // Apply restrictions for non-SUPER_ADMIN
+        if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
+            const allowed = req.user.allowedColleges || [];
+            whereClause.id = { [Op.in]: allowed };
+        }
+
         const { count, rows } = await College.findAndCountAll({
             where: whereClause,
             limit,
@@ -150,8 +156,16 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
 // Get all active colleges (unpaginated for dropdowns)
 router.get('/active', authMiddleware, async (req, res) => {
     try {
+        const whereClause = { isActive: true };
+
+        // Apply restrictions for non-SUPER_ADMIN
+        if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
+            const allowed = req.user.allowedColleges || [];
+            whereClause.id = { [Op.in]: allowed };
+        }
+
         const colleges = await College.findAll({
-            where: { isActive: true },
+            where: whereClause,
             order: [['name', 'ASC']],
             attributes: ['id', 'name']
         });

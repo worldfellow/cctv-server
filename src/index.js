@@ -9,6 +9,8 @@ const userRoutes = require('./routes/users');
 const collegeRoutes = require('./routes/colleges');
 const cameraRoutes = require('./routes/cameras');
 const dashboardRoutes = require('./routes/dashboard');
+const screenshotRoutes = require('./routes/screenshots');
+const configRoutes = require('./routes/config');
 
 dotenv.config();
 
@@ -33,7 +35,8 @@ app.use(cors());
 //   logLevel: 'debug'
 // }));
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(morgan('dev'));
 
 // Routes
@@ -43,10 +46,20 @@ app.use('/api/users', userRoutes);
 app.use('/api/colleges', collegeRoutes);
 app.use('/api/cameras', cameraRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/screenshots', screenshotRoutes);
+app.use('/api/config', configRoutes);
 
 // Serve static frontend files
 const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
 app.use(express.static(clientPath));
+
+// Serve static files from FILE_LOCATION at /uploads
+if (process.env.FILE_LOCATION) {
+  app.use('/uploads', express.static(process.env.FILE_LOCATION));
+}
+
+// Serve public assets (logo, etc.)
+app.use('/assets', express.static(path.join(__dirname, '../public/assets')));
 
 // SPA fallback for non-API routes
 app.get('*', (req, res, next) => {

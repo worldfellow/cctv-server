@@ -73,7 +73,7 @@ router.get('/', authMiddleware, async (req, res) => {
 
             let wsPort;
             try {
-                wsPort = streamManager.startStream(camera.id, rtspUrl);
+                wsPort = streamManager.startStream(camera.id, rtspUrl, 'low');
             } catch (err) {
                 console.error(`Failed to start stream for camera ${camera.id}:`, err);
             }
