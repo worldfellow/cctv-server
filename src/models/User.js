@@ -50,8 +50,8 @@ const User = sequelize.define('User', {
         allowNull: true
     },
     role: {
-        type: DataTypes.ENUM('ADMIN', 'OPERATOR', 'VIEWER', 'SUPER_ADMIN'),
-        defaultValue: 'VIEWER'
+        type: DataTypes.STRING,
+        allowNull: false
     },
     keycloakId: {
         type: DataTypes.STRING,
@@ -65,6 +65,21 @@ const User = sequelize.define('User', {
     isActive: {
         type: DataTypes.BOOLEAN,
         defaultValue: true
+    },
+    permissions: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        defaultValue: {
+            menus: ['dashboard'],
+            actions: []
+        },
+        comment: '{ menus: string[], actions: string[] }'
+    },
+    allowedColleges: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        defaultValue: [],
+        comment: 'string[] (IDs) or ["ALL"]'
     }
 });
 

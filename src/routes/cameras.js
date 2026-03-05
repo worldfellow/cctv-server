@@ -211,6 +211,214 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
     }
 });
 
+// Bulk Export Cameras for Editing
+router.get('/bulk-export', authMiddleware, async (req, res) => {
+    try {
+        const { collegeId } = req.query;
+        const whereClause = {};
+        if (collegeId) {
+            whereClause.collegeId = collegeId;
+        }
+
+        const cameras = await Camera.findAll({
+            where: whereClause,
+            include: [{ model: College, attributes: ['name'] }],
+            order: [['collegeId', 'ASC'], ['name', 'ASC']]
+        });
+
+        const workbook = new exceljs.Workbook();
+        const sheet = workbook.addWorksheet('Cameras');
+
+        // Config sheet for dropdown lists
+        const collegesForList = await College.findAll({ attributes: ['name'] });
+        const configSheet = workbook.addWorksheet('Config');
+        configSheet.state = 'hidden';
+
+        collegesForList.forEach((college, index) => {
+            configSheet.getCell(`A${index + 1}`).value = college.name;
+        });
+
+        const statusList = ['Active', 'Inactive'];
+        statusList.forEach((status, index) => {
+            configSheet.getCell(`B${index + 1}`).value = status;
+        });
+
+        // Add headers
+        sheet.columns = [
+            { header: 'Camera ID', key: 'id', width: 15 },
+            { header: 'College Name', key: 'collegeName', width: 30 },
+            { header: 'Camera Name', key: 'name', width: 25 },
+            { header: 'Location', key: 'location', width: 25 },
+            { header: 'IP Address', key: 'ipAddress', width: 20 },
+            { header: 'RTSP Port', key: 'rtspPort', width: 15 },
+            { header: 'Channel', key: 'channel', width: 15 },
+            { header: 'Username', key: 'username', width: 20 },
+            { header: 'Password', key: 'password', width: 20 },
+            { header: 'Status', key: 'status', width: 15 }
+        ];
+
+        // Format Header
+        sheet.getRow(1).font = { bold: true };
+        sheet.getRow(1).fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFE0E0E0' }
+        };
+
+        // Add Data
+        cameras.forEach(camera => {
+            sheet.addRow({
+                id: camera.id,
+                collegeName: camera.College ? camera.College.name : 'N/A',
+                name: camera.name,
+                location: camera.location || '',
+                ipAddress: camera.ipAddress,
+                rtspPort: camera.rtspPort,
+                channel: camera.channel,
+                username: decrypt(camera.username),
+                password: decrypt(camera.password),
+                status: camera.isActive ? 'Active' : 'Inactive'
+            });
+        });
+
+        // Apply validation to existing rows + 100 extra rows for new additions
+        const lastRow = cameras.length + 101;
+        const collegeCount = collegesForList.length || 1;
+
+        for (let i = 2; i <= lastRow; i++) {
+            if (collegesForList.length > 0) {
+                sheet.getCell(`B${i}`).dataValidation = {
+                    type: 'list',
+                    allowBlank: true,
+                    formulae: [`Config!$A$1:$A$${collegeCount}`]
+                };
+            }
+            sheet.getCell(`J${i}`).dataValidation = {
+                type: 'list',
+                allowBlank: true,
+                formulae: [`Config!$B$1:$B$2`]
+            };
+        }
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Camera_Bulk_Edit_${new Date().toISOString().split('T')[0]}.xlsx`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        console.error('Error during bulk export:', error);
+        res.status(500).json({ message: 'Error generating export' });
+    }
+});
+
+// Bulk Update Cameras from Excel
+router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        const workbook = new exceljs.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const sheet = workbook.getWorksheet('Cameras') || workbook.worksheets[0];
+
+        if (!sheet) {
+            return res.status(400).json({ message: 'Invalid Excel file structure' });
+        }
+
+        const colleges = await College.findAll();
+        const collegeMap = {};
+        colleges.forEach(c => {
+            collegeMap[c.name.trim().toLowerCase()] = c.id;
+        });
+
+        const updates = [];
+        const creates = [];
+        const errors = [];
+
+        sheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return; // Skip header
+
+            const id = row.getCell(1).value?.toString().trim();
+            const collegeName = row.getCell(2).value?.toString().trim();
+            const cameraName = row.getCell(3).value?.toString().trim();
+            const location = row.getCell(4).value?.toString().trim();
+            const ipAddress = row.getCell(5).value?.toString().trim();
+            const rtspPort = parseInt(row.getCell(6).value, 10) || 554;
+            const channel = row.getCell(7).value?.toString().trim();
+            const username = row.getCell(8).value?.toString().trim();
+            const password = row.getCell(9).value?.toString().trim();
+            const status = row.getCell(10).value?.toString().trim() || 'Active';
+
+            // Skip entirely empty rows
+            if (!id && !collegeName && !ipAddress && !cameraName) return;
+
+            const collegeId = collegeName ? collegeMap[collegeName.toLowerCase()] : null;
+
+            if (!collegeId) {
+                errors.push(`Row ${rowNumber}: College '${collegeName}' not found`);
+                return;
+            }
+
+            const cameraData = {
+                collegeId,
+                name: cameraName,
+                location: location || null,
+                ipAddress,
+                rtspPort,
+                channel,
+                isActive: status.toLowerCase() === 'active'
+            };
+
+            // Only update credentials if provided
+            if (username) cameraData.username = encrypt(username);
+            if (password) cameraData.password = encrypt(password);
+
+            if (id) {
+                updates.push({ id, data: cameraData });
+            } else {
+                // If no ID, it's a new camera
+                if (!cameraName || !ipAddress || !channel || !username || !password) {
+                    errors.push(`Row ${rowNumber}: Missing required fields for new camera (Name, IP, Channel, Username, Password)`);
+                    return;
+                }
+                creates.push(cameraData);
+            }
+        });
+
+        if (errors.length > 0) {
+            return res.status(400).json({ message: 'Validation failed', errors });
+        }
+
+        // Process Updates
+        let updateCount = 0;
+        for (const update of updates) {
+            const [affectedRows] = await Camera.update(update.data, { where: { id: update.id } });
+            if (affectedRows > 0) updateCount++;
+        }
+
+        // Process Creates
+        let createCount = 0;
+        if (creates.length > 0) {
+            const newCameras = await Camera.bulkCreate(creates);
+            createCount = newCameras.length;
+        }
+
+        res.json({
+            message: `Processed ${updates.length + creates.length} rows.`,
+            details: {
+                updated: updateCount,
+                created: createCount,
+                ignored: updates.length - updateCount
+            }
+        });
+
+    } catch (error) {
+        console.error('Error during bulk update:', error);
+        res.status(500).json({ message: 'Error processing Excel file' });
+    }
+});
+
 // Get all cameras (paginated)
 router.get('/', authMiddleware, async (req, res) => {
     try {
@@ -222,6 +430,20 @@ router.get('/', authMiddleware, async (req, res) => {
         const whereClause = {};
         if (collegeId) {
             whereClause.collegeId = collegeId;
+        }
+
+        // Apply restrictions for non-SUPER_ADMIN users
+        if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
+            const allowed = req.user.allowedColleges || [];
+            if (collegeId) {
+                // If specific college requested, check if it's allowed
+                if (!allowed.includes(collegeId)) {
+                    return res.status(403).json({ message: 'Access denied to this college' });
+                }
+            } else {
+                // Otherwise only show from allowed colleges
+                whereClause.collegeId = { [Op.in]: allowed };
+            }
         }
 
         const { count, rows } = await Camera.findAndCountAll({
@@ -278,8 +500,10 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
         const rawPassword = decrypt(camera.password) || '';
         const rtspUrl = `rtsp://${encodeURIComponent(rawUsername)}:${encodeURIComponent(rawPassword)}@${camera.ipAddress}:${camera.rtspPort}/cam/realmonitor?channel=${camera.channel}&subtype=0`;
 
+        const quality = req.query.quality || 'high';
+
         // Start stream and get the WebSocket port
-        const wsPort = streamManager.startStream(camera.id, rtspUrl);
+        const wsPort = streamManager.startStream(camera.id, rtspUrl, quality);
 
         // Calculate host based on request headers (assuming same domain for WS)
         const host = req.hostname || 'localhost';

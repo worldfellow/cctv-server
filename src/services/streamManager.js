@@ -11,7 +11,7 @@ class StreamManager {
         // Map<cameraId, { port, wsServer, rtspUrl, lastAccessed, checkTimeout }>
         this.cameras = new Map();
 
-        // Map<rtspUrl, { ffmpeg, width, height, cameras: Set<string>, inputStreamStarted: boolean }>
+        // Map<rtspUrl, { ffmpeg, width, height, cameras: Set<string>, inputSztreamStarted: boolean }>
         this.rtspSources = new Map();
 
         this.basePort = 9999;
@@ -29,18 +29,21 @@ class StreamManager {
 
     /**
      * Starts a stream for a specific camera.
-     * Shares the ffmpeg process if another camera already uses the same RTSP URL.
+     * Shares the ffmpeg process if another camera already uses the same RTSP URL and quality.
      */
-    startStream(cameraId, rtspUrl) {
+    startStream(cameraId, rtspUrl, quality = 'high') {
+        const sourceKey = `${rtspUrl}_${quality}`;
+
         // 1. If camera already has a stream, refresh it and return port
         if (this.cameras.has(cameraId)) {
             const existing = this.cameras.get(cameraId);
             existing.lastAccessed = new Date();
+            // If quality changed, we might need to handle it, but for now we keep existing
             return existing.port;
         }
 
         const wsPort = this._getNextAvailablePort();
-        console.log(`[StreamManager] starting camera ${cameraId} on port ${wsPort}`);
+        console.log(`[StreamManager] starting camera ${cameraId} on port ${wsPort} with quality ${quality}`);
 
         try {
             // 2. Create dedicated WebSocket server for this camera view
@@ -50,44 +53,63 @@ class StreamManager {
                 port: wsPort,
                 wsServer: wsServer,
                 rtspUrl: rtspUrl,
+                sourceKey: sourceKey,
                 lastAccessed: new Date(),
                 checkTimeout: null
             };
             this.cameras.set(cameraId, cameraData);
 
-            // 3. Handle RTSP source sharing
-            let source = this.rtspSources.get(rtspUrl);
+            // 3. Handle RTSP source sharing based on URL + Quality
+            let source = this.rtspSources.get(sourceKey);
 
             if (source) {
-                console.log(`[StreamManager] Source sharing: camera ${cameraId} joining existing ffmpeg for ${rtspUrl.split('@')[1] || rtspUrl}`);
+                console.log(`[StreamManager] Source sharing: camera ${cameraId} joining existing ffmpeg for ${sourceKey.split('@')[1] || sourceKey}`);
                 source.cameras.add(cameraId);
             } else {
-                console.log(`[StreamManager] Source init: new ffmpeg for ${rtspUrl.split('@')[1] || rtspUrl}`);
+                console.log(`[StreamManager] Source init: new ffmpeg for ${sourceKey.split('@')[1] || sourceKey}`);
 
                 source = {
                     ffmpeg: null,
-                    width: DEFAULT_WIDTH,
-                    height: DEFAULT_HEIGHT,
+                    width: quality === 'low' ? 640 : DEFAULT_WIDTH,
+                    height: quality === 'low' ? 360 : DEFAULT_HEIGHT,
                     cameras: new Set([cameraId]),
                     inputStreamStarted: false
                 };
-                this.rtspSources.set(rtspUrl, source);
+                this.rtspSources.set(sourceKey, source);
 
+                // Optimization: Use separate args for high/low quality
                 const ffmpegArgs = [
                     '-rtsp_transport', 'tcp',
                     '-i', rtspUrl,
                     '-f', 'mpegts',
                     '-codec:v', 'mpeg1video',
-                    '-r', '30',
-                    '-q:v', '3',
-                    '-'
+                    '-bf', '0', // Disable B-frames for lower latency
+                    '-threads', 'auto' // Use auto threads for better performance
                 ];
+
+                if (quality === 'low') {
+                    // Low quality: lower resolution, frame rate and higher quantization
+                    ffmpegArgs.push(
+                        '-s', '640x360',
+                        '-r', '15',
+                        '-q:v', '15'
+                    );
+                } else {
+                    // High quality: better resolution and frame rate
+                    ffmpegArgs.push(
+                        '-s', '1280x720',
+                        '-r', '30',
+                        '-q:v', '4'
+                    );
+                }
+
+                ffmpegArgs.push('-'); // Output to stdout
 
                 const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { detached: false });
                 source.ffmpeg = ffmpeg;
 
                 ffmpeg.stdout.on('data', (data) => {
-                    const currentSource = this.rtspSources.get(rtspUrl);
+                    const currentSource = this.rtspSources.get(sourceKey);
                     if (!currentSource) return;
 
                     if (!currentSource.inputStreamStarted) {
@@ -124,20 +146,20 @@ class StreamManager {
                         if (sizeMatch) {
                             source.width = parseInt(sizeMatch[1], 10);
                             source.height = parseInt(sizeMatch[2], 10);
-                            console.log(`[StreamManager] Detected dimensions: ${source.width}x${source.height} for source ${rtspUrl.split('@')[1] || rtspUrl}`);
+                            console.log(`[StreamManager] Detected dimensions: ${source.width}x${source.height} for source ${sourceKey}`);
                         }
                     }
                 });
 
                 ffmpeg.on('exit', (code) => {
-                    console.log(`[StreamManager] ffmpeg exited (code ${code}) for source ${rtspUrl.split('@')[1] || rtspUrl}`);
-                    this._killSource(rtspUrl);
+                    console.log(`[StreamManager] ffmpeg exited (code ${code}) for source ${sourceKey}`);
+                    this._killSource(sourceKey);
                 });
             }
 
             // 4. WebSocket connection logic
             wsServer.on('connection', (socket) => {
-                const currentSource = this.rtspSources.get(rtspUrl);
+                const currentSource = this.rtspSources.get(sourceKey);
                 const header = Buffer.alloc(8);
                 header.write(STREAM_MAGIC_BYTES);
                 header.writeUInt16BE(currentSource ? currentSource.width : DEFAULT_WIDTH, 4);
@@ -149,7 +171,7 @@ class StreamManager {
             cameraData.checkTimeout = setTimeout(() => {
                 if (this.cameras.has(cameraId)) {
                     const cam = this.cameras.get(cameraId);
-                    const s = this.rtspSources.get(rtspUrl);
+                    const s = this.rtspSources.get(sourceKey);
                     if (!s || !s.inputStreamStarted) {
                         console.warn(`[StreamManager] No data for camera ${cameraId} on port ${wsPort}. Closing camera stream.`);
                         this.stopStream(cameraId);
@@ -176,23 +198,23 @@ class StreamManager {
         if (cam.checkTimeout) clearTimeout(cam.checkTimeout);
         try { cam.wsServer.close(); } catch (e) { }
 
-        const rtspUrl = cam.rtspUrl;
+        const sourceKey = cam.sourceKey;
         this.cameras.delete(cameraId);
 
-        const source = this.rtspSources.get(rtspUrl);
+        const source = this.rtspSources.get(sourceKey);
         if (source) {
             source.cameras.delete(cameraId);
             if (source.cameras.size === 0) {
-                this._killSource(rtspUrl);
+                this._killSource(sourceKey);
             }
         }
     }
 
-    _killSource(rtspUrl) {
-        const source = this.rtspSources.get(rtspUrl);
+    _killSource(sourceKey) {
+        const source = this.rtspSources.get(sourceKey);
         if (!source) return;
 
-        console.log(`[StreamManager] killing source for ${rtspUrl.split('@')[1] || rtspUrl}`);
+        console.log(`[StreamManager] killing source for ${sourceKey.split('@')[1] || sourceKey}`);
         if (source.ffmpeg) {
             try { source.ffmpeg.kill('SIGTERM'); } catch (e) { }
         }
@@ -207,7 +229,7 @@ class StreamManager {
             }
         }
 
-        this.rtspSources.delete(rtspUrl);
+        this.rtspSources.delete(sourceKey);
     }
 
     stopAllStreams() {

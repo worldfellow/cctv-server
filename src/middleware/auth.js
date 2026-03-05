@@ -69,7 +69,8 @@ module.exports = async (req, res, next) => {
                 id: user.id,
                 email: user.email,
                 role: user.role,
-                keycloakId: user.keycloakId
+                keycloakId: user.keycloakId,
+                allowedColleges: user.allowedColleges || []
             };
             next();
         });

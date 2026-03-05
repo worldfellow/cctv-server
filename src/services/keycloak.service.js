@@ -78,13 +78,56 @@ class KeycloakService {
         }
     }
 
+    async getOrCreateClientRole(roleName) {
+        await this.init();
+        const realm = process.env.KEYCLOAK_REALM || 'erpai-realm';
+        const clientId = process.env.KEYCLOAK_CLIENT_ID || 'erpai2.0-client';
+
+        try {
+            const clients = await this.kcAdminClient.clients.find({
+                realm: realm,
+                clientId: clientId
+            });
+
+            if (!clients || clients.length === 0) {
+                throw new Error(`Client ${clientId} not found in Keycloak`);
+            }
+
+            const client = clients[0];
+            const roles = await this.kcAdminClient.clients.listRoles({
+                realm: realm,
+                id: client.id
+            });
+
+            let targetRole = roles.find(r => r.name === roleName);
+            if (!targetRole) {
+                console.log(`Role ${roleName} not found in client ${clientId}, creating it...`);
+                await this.kcAdminClient.clients.createRole({
+                    realm: realm,
+                    id: client.id,
+                    name: roleName
+                });
+
+                const updatedRoles = await this.kcAdminClient.clients.listRoles({
+                    realm: realm,
+                    id: client.id
+                });
+                targetRole = updatedRoles.find(r => r.name === roleName);
+            }
+
+            return targetRole;
+        } catch (error) {
+            console.error('Error in getOrCreateClientRole:', error);
+            throw error;
+        }
+    }
+
     async assignClientRole(keycloakUserId, roleName) {
         await this.init();
         const realm = process.env.KEYCLOAK_REALM || 'erpai-realm';
         const clientId = process.env.KEYCLOAK_CLIENT_ID || 'erpai2.0-client';
 
         try {
-            // Find the client by clientId
             const clients = await this.kcAdminClient.clients.find({
                 realm: realm,
                 clientId: clientId
@@ -96,16 +139,10 @@ class KeycloakService {
             }
 
             const client = clients[0];
+            const targetRole = await this.getOrCreateClientRole(roleName);
 
-            // Get available client roles
-            const roles = await this.kcAdminClient.clients.listRoles({
-                realm: realm,
-                id: client.id
-            });
-
-            const targetRole = roles.find(r => r.name === roleName);
             if (!targetRole) {
-                console.warn(`Role ${roleName} not found in client ${clientId}, skipping role assignment`);
+                console.error(`Failed to create or find role ${roleName}`);
                 return;
             }
 

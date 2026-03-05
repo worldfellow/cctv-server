@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { User, College } = require('../models');
+const { User, College, Role } = require('../models');
 const authMiddleware = require('../middleware/auth');
 const keycloakService = require('../services/keycloak.service');
 const bcrypt = require('bcryptjs');
@@ -10,6 +10,34 @@ const multer = require('multer');
 
 // Configure multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Get all roles
+router.get('/roles', authMiddleware, async (req, res) => {
+    try {
+        const roles = await Role.findAll();
+        res.json(roles);
+    } catch (error) {
+        console.error('Error fetching roles:', error);
+        res.status(500).json({ message: 'Error fetching roles' });
+    }
+});
+
+// Get current user profile
+router.get('/me', authMiddleware, async (req, res) => {
+    try {
+        const user = await User.findByPk(req.user.id, {
+            attributes: { exclude: ['password'] },
+            include: [{ model: College, attributes: ['name'] }]
+        });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        res.json(user);
+    } catch (error) {
+        console.error('Error fetching current user:', error);
+        res.status(500).json({ message: 'Error fetching profile' });
+    }
+});
 
 // Get all users (paginated)
 router.get('/', authMiddleware, async (req, res) => {
@@ -27,6 +55,12 @@ router.get('/', authMiddleware, async (req, res) => {
                 { email: { [Op.like]: `%${search}%` } },
                 { mobileNo: { [Op.like]: `%${search}%` } }
             ];
+        }
+
+        // Apply restrictions for non-SUPER_ADMIN
+        if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
+            const allowed = req.user.allowedColleges || [];
+            whereClause.collegeId = { [Op.in]: allowed };
         }
 
         const { count, rows } = await User.findAndCountAll({
@@ -123,7 +157,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
             email: 'john.doe@example.com',
             mobileNo: '9876543210',
             role: 'STAFF',
-            collegeName: 'Sample Engineering College'
+            collegeName: ''
         });
 
         // Add a separate sheet for reference (Roles and Colleges)
@@ -133,16 +167,42 @@ router.get('/template/download', authMiddleware, async (req, res) => {
             { header: 'Active Colleges', key: 'colleges', width: 40 }
         ];
 
-        const roles = ['SUPER_ADMIN', 'ADMIN', 'STAFF', 'OPERATOR'];
+        const roles = await Role.findAll({ attributes: ['roleName'] });
+        const roleNames = roles.map(r => r.roleName);
         const colleges = await College.findAll({ where: { isActive: true }, attributes: ['name'] });
         const collegeNames = colleges.map(c => c.name);
 
-        const maxRows = Math.max(roles.length, collegeNames.length);
+        const maxRows = Math.max(roleNames.length, collegeNames.length);
         for (let i = 0; i < maxRows; i++) {
             refSheet.addRow({
-                roles: roles[i] || '',
+                roles: roleNames[i] || '',
                 colleges: collegeNames[i] || ''
             });
+        }
+
+        // Add data validation to the Users sheet
+        // Column E (Role) and Column F (College Name)
+        // We apply this to the first 500 rows to ensure they are available for new entries
+        for (let i = 2; i <= 500; i++) {
+            sheet.getCell(`E${i}`).dataValidation = {
+                type: 'list',
+                allowBlank: true,
+                formulae: [`Reference!$A$2:$A$${roleNames.length + 1}`],
+                showErrorMessage: true,
+                errorStyle: 'stop',
+                errorTitle: 'Invalid Role',
+                error: 'Please select a valid role from the list.'
+            };
+
+            sheet.getCell(`F${i}`).dataValidation = {
+                type: 'list',
+                allowBlank: true,
+                formulae: [`Reference!$B$2:$B$${collegeNames.length + 1}`],
+                showErrorMessage: true,
+                errorStyle: 'stop',
+                errorTitle: 'Invalid College',
+                error: 'Please select a valid college name from the list.'
+            };
         }
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -286,6 +346,13 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                     }, kcAttributes);
                 }
 
+                // Get or Create Role in Keycloak and DB
+                const kcRole = await keycloakService.getOrCreateClientRole(userData.role);
+                await Role.findOrCreate({
+                    where: { roleName: userData.role },
+                    defaults: { roleId: kcRole.id, roleName: userData.role }
+                });
+
                 // Assign Role
                 if (keycloakId) {
                     try {
@@ -296,6 +363,11 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                 }
 
                 // Save locally
+                const defaultPermissions = {
+                    menus: ['dashboard'],
+                    actions: []
+                };
+
                 await User.create({
                     firstName: userData.firstName,
                     lastName: userData.lastName,
@@ -304,7 +376,9 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                     role: userData.role,
                     collegeId: userData.collegeId,
                     password: hashedPassword,
-                    keycloakId: keycloakId
+                    keycloakId: keycloakId,
+                    permissions: userData.role === 'SUPER_ADMIN' ? null : defaultPermissions,
+                    allowedColleges: userData.collegeId ? [userData.collegeId] : []
                 });
 
                 results.success++;
@@ -389,6 +463,13 @@ router.post('/', authMiddleware, async (req, res) => {
                 console.log(`User ${email} created in Keycloak with ID: ${keycloakId}`);
             }
 
+            // Get or Create Role in Keycloak and DB
+            const kcRole = await keycloakService.getOrCreateClientRole(role);
+            await Role.findOrCreate({
+                where: { roleName: role },
+                defaults: { roleId: kcRole.id, roleName: role }
+            });
+
             // Assign client role in Keycloak
             if (keycloakId && role) {
                 try {
@@ -402,6 +483,11 @@ router.post('/', authMiddleware, async (req, res) => {
             return res.status(500).json({ message: 'Error handling user in Keycloak' });
         }
 
+        const defaultPermissions = {
+            menus: ['dashboard'],
+            actions: []
+        };
+
         const newUser = await User.create({
             firstName,
             lastName,
@@ -410,7 +496,9 @@ router.post('/', authMiddleware, async (req, res) => {
             password: hashedPassword,
             role,
             collegeId,
-            keycloakId
+            keycloakId,
+            permissions: role === 'SUPER_ADMIN' ? null : defaultPermissions,
+            allowedColleges: collegeId ? [collegeId] : []
         });
 
         const userResponse = await User.findByPk(newUser.id, {
@@ -609,6 +697,27 @@ router.post('/bulk-delete', authMiddleware, async (req, res) => {
     } catch (error) {
         console.error('Error bulk deleting users:', error);
         res.status(500).json({ message: 'Error deleting users' });
+    }
+});
+
+// Bulk update user permissions and allowed colleges
+router.post('/bulk-permissions', authMiddleware, async (req, res) => {
+    try {
+        const { userIds, permissions, allowedColleges } = req.body;
+
+        if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+            return res.status(400).json({ message: 'Please provide an array of user IDs' });
+        }
+
+        await User.update(
+            { permissions, allowedColleges },
+            { where: { id: { [Op.in]: userIds } } }
+        );
+
+        res.json({ message: `Access updated for ${userIds.length} user(s) successfully` });
+    } catch (error) {
+        console.error('Error bulk updating permissions:', error);
+        res.status(500).json({ message: 'Error updating permissions' });
     }
 });
 
