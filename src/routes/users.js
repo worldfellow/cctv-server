@@ -170,7 +170,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
         const roles = await Role.findAll({ attributes: ['roleName'] });
         const roleNames = roles.map(r => r.roleName);
         const colleges = await College.findAll({ where: { isActive: true }, attributes: ['name'] });
-        const collegeNames = colleges.map(c => c.name);
+        const collegeNames = ['All Colleges', ...colleges.map(c => c.name)];
 
         const maxRows = Math.max(roleNames.length, collegeNames.length);
         for (let i = 0; i < maxRows; i++) {
@@ -292,19 +292,27 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
             }
 
             let collegeId = null;
+            let allowedColleges = [];
+
             if (!rolesWithoutCollege.includes(role)) {
                 if (!collegeName) {
                     errors.push(`Row ${rowNumber}: College Name is required for role ${role}`);
                     continue;
                 }
-                collegeId = collegeMap.get(collegeName.toLowerCase());
-                if (!collegeId) {
-                    errors.push(`Row ${rowNumber}: College '${collegeName}' not found or inactive`);
-                    continue;
+
+                if (collegeName.toLowerCase() === 'all colleges') {
+                    allowedColleges = ['ALL'];
+                } else {
+                    collegeId = collegeMap.get(collegeName.toLowerCase());
+                    if (!collegeId) {
+                        errors.push(`Row ${rowNumber}: College '${collegeName}' not found or inactive`);
+                        continue;
+                    }
+                    allowedColleges = [collegeId];
                 }
             }
 
-            usersToCreate.push({ firstName, lastName, email, mobileNo, role, collegeId, rowNumber });
+            usersToCreate.push({ firstName, lastName, email, mobileNo, role, collegeId, allowedColleges, rowNumber });
             emailSet.add(email);
             mobileSet.add(mobileNo);
         }
@@ -378,7 +386,7 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                     password: hashedPassword,
                     keycloakId: keycloakId,
                     permissions: userData.role === 'SUPER_ADMIN' ? null : defaultPermissions,
-                    allowedColleges: userData.collegeId ? [userData.collegeId] : []
+                    allowedColleges: userData.allowedColleges || []
                 });
 
                 results.success++;
@@ -495,10 +503,10 @@ router.post('/', authMiddleware, async (req, res) => {
             mobileNo,
             password: hashedPassword,
             role,
-            collegeId,
+            collegeId: collegeId === 'ALL' ? null : collegeId,
             keycloakId,
             permissions: role === 'SUPER_ADMIN' ? null : defaultPermissions,
-            allowedColleges: collegeId ? [collegeId] : []
+            allowedColleges: collegeId === 'ALL' ? ['ALL'] : (collegeId ? [collegeId] : [])
         });
 
         const userResponse = await User.findByPk(newUser.id, {
@@ -527,13 +535,17 @@ router.put('/:id', authMiddleware, async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        const actualCollegeId = collegeId === 'ALL' ? null : collegeId;
+        const allowedColleges = collegeId === 'ALL' ? ['ALL'] : (collegeId ? [collegeId] : []);
+
         const updateData = {
             firstName,
             lastName,
             email,
             mobileNo,
             role,
-            collegeId
+            collegeId: actualCollegeId,
+            allowedColleges: allowedColleges
         };
 
         if (password) {
