@@ -84,7 +84,15 @@ const User = sequelize.define('User', {
 });
 
 // Associations
-User.belongsTo(College, { foreignKey: 'collegeId' });
-College.hasMany(User, { foreignKey: 'collegeId' });
+User.belongsTo(College, {
+    foreignKey: 'collegeId',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+});
+College.hasMany(User, {
+    foreignKey: 'collegeId',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+});
 
 module.exports = User;

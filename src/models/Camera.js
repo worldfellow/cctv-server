@@ -55,7 +55,15 @@ const Camera = sequelize.define('Camera', {
 });
 
 // Associations
-Camera.belongsTo(College, { foreignKey: 'collegeId' });
-College.hasMany(Camera, { foreignKey: 'collegeId' });
+Camera.belongsTo(College, {
+    foreignKey: 'collegeId',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE'
+});
+College.hasMany(Camera, {
+    foreignKey: 'collegeId',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE'
+});
 
 module.exports = Camera;
