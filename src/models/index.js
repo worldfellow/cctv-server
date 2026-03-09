@@ -12,11 +12,11 @@ const initDb = async () => {
         console.log('Database connection has been established successfully.');
 
         // One-time migration: add isActive column if it doesn't exist
+        const queryInterface = sequelize.getQueryInterface();
+
         try {
-            const [results] = await sequelize.query(
-                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Users' AND COLUMN_NAME = 'isActive'"
-            );
-            if (results.length === 0) {
+            const userTable = await queryInterface.describeTable('Users');
+            if (!userTable.isActive) {
                 await sequelize.query("ALTER TABLE `Users` ADD COLUMN `isActive` TINYINT(1) DEFAULT 1");
                 console.log('Migration: Added isActive column to Users table.');
             }
@@ -27,9 +27,8 @@ const initDb = async () => {
 
         // One-time migration: add isActive column to Colleges if it doesn't exist
         try {
-            const [cols] = await sequelize.query("PRAGMA table_info('Colleges')");
-            const hasIsActive = cols.some(col => col.name === 'isActive');
-            if (!hasIsActive) {
+            const collegeTable = await queryInterface.describeTable('Colleges');
+            if (!collegeTable.isActive) {
                 await sequelize.query("ALTER TABLE `Colleges` ADD COLUMN `isActive` TINYINT(1) DEFAULT 1");
                 console.log('Migration: Added isActive column to Colleges table.');
             }
