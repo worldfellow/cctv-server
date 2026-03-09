@@ -58,12 +58,14 @@ const Camera = sequelize.define('Camera', {
 Camera.belongsTo(College, {
     foreignKey: 'collegeId',
     onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
+    onUpdate: 'CASCADE',
+    constraints: false
 });
 College.hasMany(Camera, {
     foreignKey: 'collegeId',
     onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
+    onUpdate: 'CASCADE',
+    constraints: false
 });
 
 module.exports = Camera;
