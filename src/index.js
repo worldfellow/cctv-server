@@ -50,8 +50,8 @@ app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 
 // Serve static frontend files
-const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
-app.use(express.static(clientPath));
+// const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
+// app.use(express.static(clientPath));
 
 // Serve static files from FILE_LOCATION at /uploads
 if (process.env.FILE_LOCATION) {
