@@ -87,12 +87,14 @@ const User = sequelize.define('User', {
 User.belongsTo(College, {
     foreignKey: 'collegeId',
     onDelete: 'SET NULL',
-    onUpdate: 'CASCADE'
+    onUpdate: 'CASCADE',
+    constraints: false
 });
 College.hasMany(User, {
     foreignKey: 'collegeId',
     onDelete: 'SET NULL',
-    onUpdate: 'CASCADE'
+    onUpdate: 'CASCADE',
+    constraints: false
 });
 
 module.exports = User;
