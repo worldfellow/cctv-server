@@ -50,8 +50,8 @@ app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 
 // Serve static frontend files
-const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
-app.use(express.static(clientPath));
+// const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
+// app.use(express.static(clientPath));
 // Serve static files from FILE_LOCATION at /uploads
 if (process.env.FILE_LOCATION) {
   app.use('/uploads', express.static(process.env.FILE_LOCATION));
@@ -61,12 +61,12 @@ if (process.env.FILE_LOCATION) {
 app.use('/assets', express.static(path.join(__dirname, '../public/assets')));
 
 // SPA fallback for non-API routes
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api/')) {
-    return next();
-  }
-  res.sendFile(path.join(clientPath, 'index.html'));
-});
+// app.get('*', (req, res, next) => {
+//   if (req.path.startsWith('/api/')) {
+//     return next();
+//   }
+//   res.sendFile(path.join(clientPath, 'index.html'));
+// });
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
