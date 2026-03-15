@@ -95,11 +95,11 @@ class StreamManager {
                         '-q:v', '15'
                     );
                 } else {
-                    // High quality: better resolution and frame rate
+                    // High quality: Full HD resolution and better clarity
                     ffmpegArgs.push(
-                        '-s', '1280x720',
-                        '-r', '30',
-                        '-q:v', '4'
+                        '-s', '1920x1080',
+                        '-r', '25',
+                        '-q:v', '3'
                     );
                 }
 
