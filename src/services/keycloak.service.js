@@ -94,25 +94,60 @@ class KeycloakService {
             }
 
             const client = clients[0];
+
+            // Try to find the role directly first (more efficient and avoids pagination issues)
+            try {
+                const role = await this.kcAdminClient.clients.findRole({
+                    realm: realm,
+                    id: client.id,
+                    roleName: roleName
+                });
+                if (role) return role;
+            } catch (error) {
+                // findRole might not be supported or might throw 404
+                console.log(`Direct findRole for ${roleName} failed or not found, falling back to list...`);
+            }
+
+            // Fallback to listing roles
             const roles = await this.kcAdminClient.clients.listRoles({
                 realm: realm,
-                id: client.id
+                id: client.id,
+                max: 1000 // Increase limit to avoid missing roles
             });
 
             let targetRole = roles.find(r => r.name === roleName);
+
             if (!targetRole) {
                 console.log(`Role ${roleName} not found in client ${clientId}, creating it...`);
-                await this.kcAdminClient.clients.createRole({
-                    realm: realm,
-                    id: client.id,
-                    name: roleName
-                });
+                try {
+                    await this.kcAdminClient.clients.createRole({
+                        realm: realm,
+                        id: client.id,
+                        name: roleName
+                    });
+                } catch (createError) {
+                    // Check if role was created by another process or already exists
+                    const errorMsg = createError.message || "";
+                    const errorData = createError.response?.data?.errorMessage || "";
 
+                    if (errorMsg.includes('already exists') || errorData.includes('already exists') || createError.status === 409) {
+                        console.log(`Role ${roleName} already exists in Keycloak (confirmed by conflict error).`);
+                    } else {
+                        throw createError;
+                    }
+                }
+
+                // Fetch roles again to get the new/existing role object
                 const updatedRoles = await this.kcAdminClient.clients.listRoles({
                     realm: realm,
-                    id: client.id
+                    id: client.id,
+                    max: 1000
                 });
                 targetRole = updatedRoles.find(r => r.name === roleName);
+            }
+
+            if (!targetRole) {
+                throw new Error(`Failed to create or find role: ${roleName}`);
             }
 
             return targetRole;

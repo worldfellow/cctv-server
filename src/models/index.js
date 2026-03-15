@@ -36,8 +36,8 @@ const initDb = async () => {
             console.log('Migration check skipped for Colleges (table may not exist yet).');
         }
 
-        // Sync models (creates tables if they don't exist)
-        await sequelize.sync();
+        // Sync models (creates tables if they don't exist, and updates schema)
+        await sequelize.sync({ alter: true });
         console.log('Database synchronized.');
 
         // Seed initial roles

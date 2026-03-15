@@ -11,6 +11,98 @@ const multer = require('multer');
 // Configure multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
 
+// API to save super_admin without authorization header
+router.post('/save-super-admin', async (req, res) => {
+    try {
+        const { firstName, lastName, email, mobileNo, password } = req.body;
+
+        if (!email || !password || !firstName || !lastName || !mobileNo) {
+            return res.status(400).json({ message: 'Missing required fields: firstName, lastName, email, mobileNo, password' });
+        }
+
+        // 1. Check if user exists in local database
+        let user = await User.findOne({ where: { email } });
+
+        if (user) {
+            // If exists, directly save it with role SUPER_ADMIN
+            await user.update({
+                role: 'SUPER_ADMIN',
+                permissions: null,
+                allowedColleges: ['ALL']
+            });
+
+            const updatedUser = await User.findByPk(user.id, {
+                attributes: { exclude: ['password'] }
+            });
+
+            return res.json({
+                message: 'Existing user updated to SUPER_ADMIN',
+                user: updatedUser
+            });
+        } else {
+            // 2. If not exist, handle Keycloak
+            let keycloakId = null;
+            try {
+                // Check if user exists in Keycloak
+                const existingKcUser = await keycloakService.findUserByEmail(email);
+
+                if (existingKcUser) {
+                    keycloakId = existingKcUser.id;
+                } else {
+                    // Create in Keycloak
+                    keycloakId = await keycloakService.createUser({
+                        firstName,
+                        lastName,
+                        email,
+                        password
+                    });
+                }
+
+                // 3. Assign role SUPER_ADMIN in Keycloak
+                const kcRole = await keycloakService.getOrCreateClientRole('SUPER_ADMIN');
+
+                // Ensure the role exists in our local Role table too
+                await Role.findOrCreate({
+                    where: { roleName: 'SUPER_ADMIN' },
+                    defaults: { roleId: kcRole.id, roleName: 'SUPER_ADMIN' }
+                });
+
+                await keycloakService.assignClientRole(keycloakId, 'SUPER_ADMIN');
+
+            } catch (kcError) {
+                console.error('Keycloak operation failed:', kcError);
+                return res.status(500).json({ message: 'Error handling user in Keycloak', error: kcError.message });
+            }
+
+            // 4. Save in local database
+            const hashedPassword = await bcrypt.hash(password, 10);
+            const newUser = await User.create({
+                firstName,
+                lastName,
+                email,
+                mobileNo,
+                password: hashedPassword,
+                role: 'SUPER_ADMIN',
+                keycloakId,
+                permissions: null,
+                allowedColleges: ['ALL']
+            });
+
+            const userResponse = await User.findByPk(newUser.id, {
+                attributes: { exclude: ['password'] }
+            });
+
+            return res.status(201).json({
+                message: 'Super Admin created and saved successfully',
+                user: userResponse
+            });
+        }
+    } catch (error) {
+        console.error('Error in save-super-admin:', error);
+        res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+});
+
 // Get all roles
 router.get('/roles', authMiddleware, async (req, res) => {
     try {
