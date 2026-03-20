@@ -28,13 +28,15 @@ class StreamManager {
         console.log(`[StreamManager] WebSocket multiplexer listening on port ${this.wsPort}`);
 
         this.wsServer.on('connection', (socket, req) => {
-            const cameraKey = req.url.substring(1); // Remove leading slash
+            // Robustly extract cameraKey from req.url (e.g., "/123_low" -> "123_low")
+            const cameraKey = req.url.split('?')[0].replace(/^\//, ''); 
             if (!cameraKey) {
+                console.warn(`[StreamManager] Rejected connection - no cameraKey in URL: ${req.url}`);
                 socket.close();
                 return;
             }
 
-            console.log(`[StreamManager] Client connected for camera key: ${cameraKey}`);
+            console.log(`[StreamManager] Client connecting: ${cameraKey}`);
 
             if (!this.clients.has(cameraKey)) {
                 this.clients.set(cameraKey, new Set());
@@ -42,10 +44,18 @@ class StreamManager {
             const cameraClients = this.clients.get(cameraKey);
             cameraClients.add(socket);
 
-            // Send JSMpeg header
+            // Fetch state for this specific camera
             const camera = this.cameras.get(cameraKey);
+            if (!camera) {
+                console.warn(`[StreamManager] Client connected for UNKNOWN camera key: ${cameraKey}`);
+            }
+
             const sourceKey = camera ? camera.sourceKey : null;
             const source = sourceKey ? this.rtspSources.get(sourceKey) : null;
+
+            if (source) {
+                console.log(`[StreamManager] Streaming started for existing source: ${sourceKey.split('@')[1] || sourceKey}`);
+            }
 
             const header = Buffer.alloc(8);
             header.write(STREAM_MAGIC_BYTES);
@@ -55,7 +65,7 @@ class StreamManager {
 
             socket.on('close', () => {
                 cameraClients.delete(socket);
-                console.log(`[StreamManager] Client disconnected from ${cameraKey}`);
+                console.log(`[StreamManager] Client disconnected: ${cameraKey}. Remaining clients for key: ${cameraClients.size}`);
             });
         });
     }
@@ -73,10 +83,11 @@ class StreamManager {
         if (this.cameras.has(cameraKey)) {
             const existing = this.cameras.get(cameraKey);
             existing.lastAccessed = new Date();
+            console.log(`[StreamManager] Camera ${cameraId} (${quality}) already active. Refreshing session.`);
             return this.wsPort;
         }
 
-        console.log(`[StreamManager] initializing camera ${cameraId} with quality ${quality}`);
+        console.log(`[StreamManager] INITIALIZING camera ${cameraId} with quality ${quality}`);
 
         try {
             const cameraData = {
