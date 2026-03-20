@@ -52,25 +52,14 @@ router.get('/', authMiddleware, async (req, res) => {
             include: [{ model: College, attributes: ['name'] }]
         });
 
-        const formattedData = rows.map(camera => {
+        const formattedData = [];
+        for (const camera of rows) {
             const rawUsername = decrypt(camera.username) || '';
             const rawPassword = decrypt(camera.password) || '';
 
-            console.log(rawUsername);
-            console.log(rawPassword);
-            console.log(camera.ipAddress);
-            console.log(camera.rtspPort);
-            console.log(camera.channel);
-
             // Construct RTSP URL for streamManager
             const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
-            console.log(rtspUrl);
-            // Note: In a real production scenario, we might want to start streams on demand 
-            // but for "autoplay" dashboard requirement, we ensure they are ready.
-            // However, starting 20 streams at once might be heavy.
-            // We'll return the wsUrl and the client component will trigger the start if needed,
-            // or we start it here. Let's start it here as per "autoplay" requirement.
-
+            
             let wsPort;
             try {
                 wsPort = streamManager.startStream(camera.id, rtspUrl, 'low');
@@ -80,16 +69,21 @@ router.get('/', authMiddleware, async (req, res) => {
 
             const host = req.get('host') || 'localhost';
 
-            return {
+            formattedData.push({
                 id: camera.id,
                 name: camera.name,
                 location: camera.location,
                 status: 'online',
                 thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop',
-                wsUrl: wsPort ? `ws://${host.split(':')[0]}:${wsPort}` : null,
+                wsUrl: wsPort ? `ws://${host.split(':')[0]}:${wsPort}/${camera.id}_low` : null,
                 collegeName: camera.College ? camera.College.name : null
-            };
-        });
+            });
+            
+            // tiny delay to prevent process flood
+            if (rows.length > 1) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
 
         res.json({
             data: formattedData,

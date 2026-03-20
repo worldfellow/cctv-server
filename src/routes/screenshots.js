@@ -6,17 +6,12 @@ const fs = require('fs');
 const authMiddleware = require('../middleware/auth');
 
 // Ensure upload directory exists
-const uploadDir = process.env.SCREENSHOT_PATH;
-
-if (!uploadDir) {
-    console.error('CRITICAL: SCREENSHOT_PATH environment variable is not set.');
-} else if (!fs.existsSync(uploadDir)) {
+const uploadDir = process.env.SCREENSHOT_PATH || path.join(__dirname, '../../../uploads/screenshots');
     try {
         fs.mkdirSync(uploadDir, { recursive: true });
     } catch (err) {
         console.error(`Failed to create screenshot directory at ${uploadDir}:`, err.message);
     }
-}
 
 router.post('/', authMiddleware, async (req, res) => {
     try {
