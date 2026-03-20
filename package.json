@@ -4,8 +4,8 @@
   "description": "CCTV Management Server",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node --max-old-space-size=4096 src/index.js",
+    "dev": "nodemon --max-old-space-size=4096 src/index.js"
   },
   "dependencies": {
     "@keycloak/keycloak-admin-client": "^26.5.4",
