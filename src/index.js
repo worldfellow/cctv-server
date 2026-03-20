@@ -43,9 +43,9 @@ app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 
 // Serve static files from FILE_LOCATION at /uploads
-const uploadsPath = process.env.FILE_LOCATION || path.join(__dirname, '../../uploads');
+const uploadsPath = process.env.FILE_LOCATION;
 console.log(`Serving uploads from: ${uploadsPath}`);
-app.use('/uploads', express.static(uploadsPath));
+app.use('/api/uploads', express.static(uploadsPath));
 
 // Serve static frontend files
 // const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');

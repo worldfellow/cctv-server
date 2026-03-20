@@ -79,9 +79,9 @@ router.get('/', authMiddleware, async (req, res) => {
                 collegeName: camera.College ? camera.College.name : null
             });
             
-            // tiny delay to prevent process flood
+            // stagger delay to ensure clean process start
             if (rows.length > 1) {
-                await new Promise(resolve => setTimeout(resolve, 50));
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
