@@ -505,7 +505,7 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
         const wsPort = streamManager.startStream(camera.id, rtspUrl, quality);
 
         const host = req.get('host') || 'localhost';
-        const protocol = req.protocol === 'https' ? 'wss' : 'ws';
+        const protocol = (req.get('X-Forwarded-Proto') || req.protocol) === 'https' ? 'wss' : 'ws';
 
         res.json({
             message: 'Stream started successfully',

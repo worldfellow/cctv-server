@@ -68,7 +68,7 @@ router.get('/', authMiddleware, async (req, res) => {
             }
 
             const host = req.get('host') || 'localhost';
-            const protocol = req.protocol === 'https' ? 'wss' : 'ws';
+            const protocol = (req.get('X-Forwarded-Proto') || req.protocol) === 'https' ? 'wss' : 'ws';
 
             formattedData.push({
                 id: camera.id,
