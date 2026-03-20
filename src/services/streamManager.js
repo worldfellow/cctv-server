@@ -19,17 +19,24 @@ class StreamManager {
 
         this.wsPort = 9999;
         this.CONNECTION_TIMEOUT = 15000;
-
-        this._initWebSocketServer();
     }
 
-    _initWebSocketServer() {
-        this.wsServer = new WebSocket.Server({ port: this.wsPort });
-        console.log(`[StreamManager] WebSocket multiplexer listening on port ${this.wsPort}`);
+    attach(server) {
+        this.wsServer = new WebSocket.Server({ noServer: true });
+        console.log(`[StreamManager] WebSocket multiplexer attached to server`);
+
+        server.on('upgrade', (request, socket, head) => {
+            const pathname = request.url.split('?')[0];
+            if (pathname.includes('/stream/')) {
+                this.wsServer.handleUpgrade(request, socket, head, (ws) => {
+                    this.wsServer.emit('connection', ws, request);
+                });
+            }
+        });
 
         this.wsServer.on('connection', (socket, req) => {
-            // Robustly extract cameraKey from req.url (e.g., "/123_low" -> "123_low")
-            const cameraKey = req.url.split('?')[0].replace(/^\//, ''); 
+            // Robustly extract cameraKey from req.url (e.g., "/api/stream/123_low" -> "123_low")
+            const cameraKey = req.url.split('?')[0].split('/stream/')[1]?.replace(/^\//, ''); 
             if (!cameraKey) {
                 console.warn(`[StreamManager] Rejected connection - no cameraKey in URL: ${req.url}`);
                 socket.close();

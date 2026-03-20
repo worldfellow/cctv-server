@@ -504,12 +504,12 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
         // Start stream and get the WebSocket port
         const wsPort = streamManager.startStream(camera.id, rtspUrl, quality);
 
-        // Calculate host based on request headers (assuming same domain for WS)
-        const host = req.hostname || 'localhost';
+        const host = req.get('host') || 'localhost';
+        const protocol = req.protocol === 'https' ? 'wss' : 'ws';
 
         res.json({
             message: 'Stream started successfully',
-            wsUrl: `ws://${host}:${wsPort}/${camera.id}_${quality}`
+            wsUrl: `${protocol}://${host}/api/stream/${camera.id}_${quality}`
         });
 
     } catch (error) {
