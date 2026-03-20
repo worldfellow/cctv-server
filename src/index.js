@@ -11,6 +11,7 @@ const cameraRoutes = require('./routes/cameras');
 const dashboardRoutes = require('./routes/dashboard');
 const screenshotRoutes = require('./routes/screenshots');
 const configRoutes = require('./routes/config');
+const streamManager = require('./services/streamManager');
 
 dotenv.config();
 
@@ -69,6 +70,9 @@ app.use('/api/uploads', express.static(uploadsPath));
 //   console.warn(`Frontend build not found at: ${clientPath}`);
 // }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+// Attach streamManager to the server
+streamManager.attach(server);

@@ -68,6 +68,7 @@ router.get('/', authMiddleware, async (req, res) => {
             }
 
             const host = req.get('host') || 'localhost';
+            const protocol = req.protocol === 'https' ? 'wss' : 'ws';
 
             formattedData.push({
                 id: camera.id,
@@ -75,7 +76,7 @@ router.get('/', authMiddleware, async (req, res) => {
                 location: camera.location,
                 status: 'online',
                 thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop',
-                wsUrl: wsPort ? `ws://${host.split(':')[0]}:${wsPort}/${camera.id}_low` : null,
+                wsUrl: wsPort ? `${protocol}://${host}/api/stream/${camera.id}_low` : null,
                 collegeName: camera.College ? camera.College.name : null
             });
             
