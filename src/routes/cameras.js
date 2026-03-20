@@ -498,10 +498,9 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
 
         const rawUsername = decrypt(camera.username) || '';
         const rawPassword = decrypt(camera.password) || '';
-        const rtspUrl = `rtsp://${encodeURIComponent(rawUsername)}:${encodeURIComponent(rawPassword)}@${camera.ipAddress}:${camera.rtspPort}/cam/realmonitor?channel=${camera.channel}&subtype=0`;
+        const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
 
         const quality = req.query.quality || 'high';
-
         // Start stream and get the WebSocket port
         const wsPort = streamManager.startStream(camera.id, rtspUrl, quality);
 
@@ -510,7 +509,7 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
 
         res.json({
             message: 'Stream started successfully',
-            wsUrl: `ws://${host}:${wsPort}`
+            wsUrl: `ws://${host}:${wsPort}/${camera.id}_${quality}`
         });
 
     } catch (error) {

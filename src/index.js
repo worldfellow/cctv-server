@@ -21,19 +21,12 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 
+const fs = require('fs');
 const path = require('path');
 
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
 app.use(cors());
-
-// Proxy Keycloak traffic directly to port 8083
-// app.use(createProxyMiddleware({
-//   target: 'http://localhost:8083',
-//   changeOrigin: false,
-//   pathFilter: ['/realms', '/resources', '/robots.txt', '/admin', '/js'],
-//   logLevel: 'debug'
-// }));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -49,24 +42,32 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 
+// Serve static files from FILE_LOCATION at /uploads
+const uploadsPath = process.env.FILE_LOCATION || path.join(__dirname, '../../uploads');
+console.log(`Serving uploads from: ${uploadsPath}`);
+app.use('/uploads', express.static(uploadsPath));
+
 // Serve static frontend files
 // const clientPath = path.join(__dirname, '../../cctv-client/dist/cctv-client/browser');
-// app.use(express.static(clientPath));
-// Serve static files from FILE_LOCATION at /uploads
-if (process.env.FILE_LOCATION) {
-  app.use('/uploads', express.static(process.env.FILE_LOCATION));
-}
-
-// Serve public assets (logo, etc.)
-app.use('/assets', express.static(path.join(__dirname, '../public/assets')));
+// if (fs.existsSync(clientPath)) {
+//   console.log(`Serving frontend from: ${clientPath}`);
+//   app.use(express.static(clientPath));
 
 // SPA fallback for non-API routes
 // app.get('*', (req, res, next) => {
-//   if (req.path.startsWith('/api/')) {
+//   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) {
 //     return next();
 //   }
-//   res.sendFile(path.join(clientPath, 'index.html'));
+//   const indexPath = path.join(clientPath, 'index.html');
+//   if (fs.existsSync(indexPath)) {
+//     res.sendFile(indexPath);
+//   } else {
+//     res.status(404).send('Frontend not built');
+//   }
 // });
+// } else {
+//   console.warn(`Frontend build not found at: ${clientPath}`);
+// }
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

@@ -8,7 +8,7 @@ const multer = require('multer');
 // Configure multer for logo uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const baseDir = process.env.FILE_LOCATION || './uploads';
+        const baseDir = process.env.FILE_LOCATION || path.join(__dirname, '../../../uploads');
         const logoDir = path.join(baseDir, 'config');
         if (!fs.existsSync(logoDir)) {
             fs.mkdirSync(logoDir, { recursive: true });
