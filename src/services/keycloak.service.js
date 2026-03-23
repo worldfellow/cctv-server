@@ -78,6 +78,29 @@ class KeycloakService {
         }
     }
 
+    async updateUser(keycloakUserId, userData) {
+        await this.init();
+        const realm = process.env.KEYCLOAK_REALM || 'erpai-realm';
+
+        try {
+            const updatePayload = {
+                realm: realm,
+                id: keycloakUserId
+            };
+
+            const userRepresentation = {};
+            if (userData.email) userRepresentation.email = userData.email;
+            if (userData.firstName) userRepresentation.firstName = userData.firstName;
+            if (userData.lastName) userRepresentation.lastName = userData.lastName;
+
+            await this.kcAdminClient.users.update(updatePayload, userRepresentation);
+            console.log(`User profile updated in Keycloak for ${keycloakUserId}`);
+        } catch (error) {
+            console.error('Error updating user in Keycloak:', error);
+            throw error;
+        }
+    }
+
     async getOrCreateClientRole(roleName) {
         await this.init();
         const realm = process.env.KEYCLOAK_REALM || 'erpai-realm';
