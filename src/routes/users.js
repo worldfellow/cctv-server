@@ -139,7 +139,9 @@ router.get('/', authMiddleware, async (req, res) => {
         const search = req.query.search || '';
         const offset = (page - 1) * limit;
 
-        const whereClause = {};
+        const whereClause = {
+            role: { [Op.ne]: 'SUPER_ADMIN' }
+        };
         if (search) {
             whereClause[Op.or] = [
                 { firstName: { [Op.like]: `%${search}%` } },
@@ -622,7 +624,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
         const { id } = req.params;
         const { firstName, lastName, email, mobileNo, role, collegeId, password } = req.body;
 
-        const user = await User.findByPk(id);
+        let user = await User.findByPk(id);
+        if (!user) {
+            // Fallback to check by keycloakId if not found by primary key
+            user = await User.findOne({ where: { keycloakId: id } });
+        }
+
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -642,6 +649,35 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
         if (password) {
             updateData.password = await bcrypt.hash(password, 10);
+        }
+
+        // Sync with Keycloak if keycloakId exists
+        if (user.keycloakId) {
+            try {
+                const kcAttributes = {};
+                if (actualCollegeId) {
+                    kcAttributes.collegeId = [actualCollegeId];
+                }
+
+                // Update Keycloak role if changed
+                if (role && role !== user.role) {
+                    await keycloakService.assignClientRole(user.keycloakId, role);
+                }
+
+                // Update Keycloak password if provided
+                if (password) {
+                    await keycloakService.resetPassword(user.keycloakId, password);
+                }
+
+                // Update Keycloak basic info if changed (firstName, lastName, email)
+                await keycloakService.updateUser(user.keycloakId, {
+                    firstName,
+                    lastName,
+                    email
+                });
+            } catch (kcError) {
+                console.warn('Failed to sync update with Keycloak:', kcError.message);
+            }
         }
 
         await user.update(updateData);
