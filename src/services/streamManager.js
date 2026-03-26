@@ -36,7 +36,7 @@ class StreamManager {
 
         this.wsServer.on('connection', (socket, req) => {
             // Robustly extract cameraKey from req.url (e.g., "/api/stream/123_low" -> "123_low")
-            const cameraKey = req.url.split('?')[0].split('/stream/')[1]?.replace(/^\//, ''); 
+            const cameraKey = req.url.split('?')[0].split('/stream/')[1]?.replace(/^\//, '');
             if (!cameraKey) {
                 console.warn(`[StreamManager] Rejected connection - no cameraKey in URL: ${req.url}`);
                 socket.close();
@@ -138,22 +138,21 @@ class StreamManager {
                 if (quality === 'low') {
                     // Optimized for dashboard cards: lower resolution but stable bitrate
                     ffmpegArgs.push(
-                        '-s', '640x480',
-                        '-r', '20',
+                        '-s', '320x240',
+                        '-r', '25',
                         '-b:v', '1000k',
-                        '-maxrate', '1200k',
+                        '-maxrate', '1000k',
                         '-bufsize', '2000k',
-                        '-q:v', '6'
+                        '-q:v', '4'
                     );
                 } else {
                     // HD quality for viewer
                     ffmpegArgs.push(
-                        '-s', '1920x1080',
-                        '-r', '25',
-                        '-b:v', '4000k',
-                        '-maxrate', '5000k',
-                        '-bufsize', '8000k',
-                        '-q:v', '3'
+                        '-s', '1280x720',   // ↓ from 1080p → saves ~50% bandwidth
+                        '-r', '20',         // ↓ smoother enough for CCTV
+                        '-b:v', '2000k',    // ↓ half bandwidth
+                        '-maxrate', '2500k',
+                        '-bufsize', '4000k'
                     );
                 }
 
