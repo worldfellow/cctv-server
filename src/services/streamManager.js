@@ -116,10 +116,11 @@ class StreamManager {
 
                 source = {
                     ffmpeg: null,
-                    width: quality === 'low' ? 640 : 1920,
-                    height: quality === 'low' ? 480 : 1080,
+                    width: quality === 'ultra' ? 1920 : (quality === 'low' ? 640 : 1280),
+                    height: quality === 'ultra' ? 1080 : (quality === 'low' ? 480 : 720),
                     cameras: new Set([cameraKey]),
-                    inputStreamStarted: false
+                    inputStreamStarted: false,
+                    isFixedResolution: true // Flag to prevent auto-detection from overwriting forced scale
                 };
                 this.rtspSources.set(sourceKey, source);
 
@@ -145,14 +146,23 @@ class StreamManager {
                         '-bufsize', '2000k',
                         '-q:v', '4'
                     );
-                } else {
-                    // HD quality for viewer
+                } else if (quality === 'ultra') {
+                    // Ultra High quality for clear image (1080p)
                     ffmpegArgs.push(
-                        '-s', '1280x720',   // ↓ from 1080p → saves ~50% bandwidth
-                        '-r', '20',         // ↓ smoother enough for CCTV
-                        '-b:v', '2000k',    // ↓ half bandwidth
+                        '-s', '1920x1080',
+                        '-r', '20',
+                        '-b:v', '4000k',
+                        '-maxrate', '5000k',
+                        '-bufsize', '8000k',
+                    );
+                } else {
+                    // Balanced HD quality (720p)
+                    ffmpegArgs.push(
+                        '-s', '1280x720',
+                        '-r', '20',
+                        '-b:v', '2000k',
                         '-maxrate', '2500k',
-                        '-bufsize', '4000k'
+                        '-bufsize', '4000k',
                     );
                 }
 
@@ -197,10 +207,10 @@ class StreamManager {
                         console.log(`[StreamManager][ffmpeg-log] ${str.trim()}`);
 
                         const sizeMatch = str.match(/(\d{2,5})x(\d{2,5})/);
-                        if (sizeMatch) {
+                        if (sizeMatch && !source.isFixedResolution) {
                             source.width = parseInt(sizeMatch[1], 10);
                             source.height = parseInt(sizeMatch[2], 10);
-                            console.log(`[StreamManager] Detected dimensions: ${source.width}x${source.height} for source ${sourceKey}`);
+                            console.log(`[StreamManager] Auto-detected dimensions: ${source.width}x${source.height} for source ${sourceKey}`);
                         }
                     }
                 });
