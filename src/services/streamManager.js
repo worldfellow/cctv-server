@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 const WebSocket = require('ws');
+const cluster = require('cluster');
 
 const STREAM_MAGIC_BYTES = 'jsmp';
 const DEFAULT_WIDTH = 640;
@@ -8,22 +9,76 @@ const DEFAULT_HEIGHT = 480;
 
 class StreamManager {
     constructor() {
-        // Map<cameraKey, { rtspUrl, lastAccessed, checkTimeout }>
-        this.cameras = new Map();
+        // Shared state (Primary only)
+        this.cameras = new Map(); // cameraKey -> data
+        this.rtspSources = new Map(); // sourceKey -> source
+        this.workerSubscriptions = new Map(); // cameraKey -> Set<workerId>
 
-        // Map<rtspUrl_quality, { ffmpeg, width, height, cameraKeys: Set<string>, inputStreamStarted: boolean }>
-        this.rtspSources = new Map();
-
-        // Map<cameraKey, Set<WebSocket>> clients
-        this.clients = new Map();
+        // Local state (Worker only)
+        this.clients = new Map(); // cameraKey -> Set<WebSocket>
 
         this.wsPort = 9999;
         this.CONNECTION_TIMEOUT = 15000;
+        this.MAX_STREAMS = 20; // Hard limit for server stability
     }
 
+    /**
+     * INITIALIZE PRIMARY: Setup orchestration and IPC listeners
+     */
+    initPrimary() {
+        if (!cluster.isPrimary) return;
+
+        console.log(`[StreamManager] Initializing Primary Orchestrator (PID: ${process.pid})`);
+
+        cluster.on('message', (worker, msg) => {
+            if (msg.type === 'START_STREAM') {
+                const { cameraId, rtspUrl, quality } = msg.data;
+                const cameraKey = `${cameraId}_${quality}`;
+                console.log(`[StreamManager] Primary: Worker ${worker.id} requesting stream ${cameraKey}`);
+
+                if (!this.workerSubscriptions.has(cameraKey)) {
+                    this.workerSubscriptions.set(cameraKey, new Set());
+                }
+                this.workerSubscriptions.get(cameraKey).add(worker.id);
+
+                this.startStream(cameraId, rtspUrl, quality);
+            }
+            if (msg.type === 'STOP_STREAM') {
+                const { cameraKey } = msg;
+                console.log(`[StreamManager] Primary: Worker ${worker.id} stopping stream ${cameraKey}`);
+                const subs = this.workerSubscriptions.get(cameraKey);
+                if (subs) {
+                    subs.delete(worker.id);
+                    if (subs.size === 0) {
+                        this.workerSubscriptions.delete(cameraKey);
+                        this.stopStream(cameraKey);
+                    }
+                }
+            }
+        });
+
+        // Cleanup if worker dies
+        cluster.on('exit', (worker) => {
+            for (const [cameraKey, subs] of this.workerSubscriptions.entries()) {
+                if (subs.has(worker.id)) {
+                    subs.delete(worker.id);
+                    if (subs.size === 0) {
+                        this.workerSubscriptions.delete(cameraKey);
+                        this.stopStream(cameraKey);
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * ATTACH TO SERVER (Worker): Handle WebSocket connections and IPC data
+     */
     attach(server) {
+        if (cluster.isPrimary) return;
+
         this.wsServer = new WebSocket.Server({ noServer: true });
-        console.log(`[StreamManager] WebSocket multiplexer attached to server`);
+        console.log(`[StreamManager] Worker ${process.pid} WebSocket multiplexer attached`);
 
         server.on('upgrade', (request, socket, head) => {
             const pathname = request.url.split('?')[0];
@@ -35,202 +90,170 @@ class StreamManager {
         });
 
         this.wsServer.on('connection', (socket, req) => {
-            // Robustly extract cameraKey from req.url (e.g., "/api/stream/123_low" -> "123_low")
             const cameraKey = req.url.split('?')[0].split('/stream/')[1]?.replace(/^\//, '');
             if (!cameraKey) {
-                console.warn(`[StreamManager] Rejected connection - no cameraKey in URL: ${req.url}`);
                 socket.close();
                 return;
             }
 
-            console.log(`[StreamManager] Client connecting: ${cameraKey}`);
-
             if (!this.clients.has(cameraKey)) {
                 this.clients.set(cameraKey, new Set());
             }
-            const cameraClients = this.clients.get(cameraKey);
-            cameraClients.add(socket);
-
-            // Fetch state for this specific camera
-            const camera = this.cameras.get(cameraKey);
-            if (!camera) {
-                console.warn(`[StreamManager] Client connected for UNKNOWN camera key: ${cameraKey}`);
-            }
-
-            const sourceKey = camera ? camera.sourceKey : null;
-            const source = sourceKey ? this.rtspSources.get(sourceKey) : null;
-
-            if (source) {
-                console.log(`[StreamManager] Streaming started for existing source: ${sourceKey.split('@')[1] || sourceKey}`);
-            }
+            this.clients.get(cameraKey).add(socket);
 
             const header = Buffer.alloc(8);
             header.write(STREAM_MAGIC_BYTES);
-            header.writeUInt16BE(source ? source.width : DEFAULT_WIDTH, 4);
-            header.writeUInt16BE(source ? source.height : DEFAULT_HEIGHT, 6);
+            header.writeUInt16BE(DEFAULT_WIDTH, 4);
+            header.writeUInt16BE(DEFAULT_HEIGHT, 6);
             socket.send(header, { binary: true });
 
             socket.on('close', () => {
-                cameraClients.delete(socket);
-                console.log(`[StreamManager] Client disconnected: ${cameraKey}. Remaining clients for key: ${cameraClients.size}`);
+                const cameraClients = this.clients.get(cameraKey);
+                if (cameraClients) {
+                    cameraClients.delete(socket);
+                    if (cameraClients.size === 0) {
+                        this.clients.delete(cameraKey);
+                        process.send({ type: 'STOP_STREAM', cameraKey });
+                    }
+                }
             });
+        });
+
+        process.on('message', (msg) => {
+            if (msg.type === 'STREAM_DATA') {
+                const { cameraKey, data } = msg;
+                const cameraClients = this.clients.get(cameraKey);
+                if (cameraClients) {
+                    cameraClients.forEach(client => {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(data, { binary: true });
+                        }
+                    });
+                }
+            }
         });
     }
 
-
     /**
-     * Starts a stream for a specific camera.
-     * Shares the ffmpeg process if another camera already uses the same RTSP URL and quality.
+     * Start a stream.
      */
     startStream(cameraId, rtspUrl, quality = 'high') {
         const sourceKey = `${rtspUrl}_${quality}`;
         const cameraKey = `${cameraId}_${quality}`;
 
-        // 1. If camera already has a stream, refresh it and return port
-        if (this.cameras.has(cameraKey)) {
-            const existing = this.cameras.get(cameraKey);
-            existing.lastAccessed = new Date();
-            console.log(`[StreamManager] Camera ${cameraId} (${quality}) already active. Refreshing session.`);
+        if (cluster.isWorker) {
+            process.send({ type: 'START_STREAM', data: { cameraId, rtspUrl, quality } });
             return this.wsPort;
         }
 
-        console.log(`[StreamManager] INITIALIZING camera ${cameraId} with quality ${quality}`);
+        if (this.cameras.has(cameraKey)) {
+            this.cameras.get(cameraKey).lastAccessed = new Date();
+            return this.wsPort;
+        }
+
+        // Enforcement: Limit concurrent streams
+        if (this.rtspSources.size >= this.MAX_STREAMS && !this.rtspSources.has(sourceKey)) {
+            console.log(`[StreamManager] Max sources reached (${this.MAX_STREAMS}). Evicting least active source...`);
+
+            let sourceToEvict = null;
+            let oldestOverallActivity = new Date();
+
+            for (const [sKey, source] of this.rtspSources.entries()) {
+                // Find the newest activity for THIS source's cameras
+                let newestForSource = new Date(0);
+                for (const cKey of source.cameras) {
+                    const cam = this.cameras.get(cKey);
+                    if (cam && cam.lastAccessed > newestForSource) newestForSource = cam.lastAccessed;
+                }
+
+                // We want to find the source whose "newest activity" is the oldest among all sources
+                if (newestForSource < oldestOverallActivity) {
+                    oldestOverallActivity = newestForSource;
+                    sourceToEvict = sKey;
+                }
+            }
+
+            if (sourceToEvict) {
+                console.log(`[StreamManager] Evicting source: ${sourceToEvict.split('@')[1] || sourceToEvict}`);
+                this._killSource(sourceToEvict);
+            }
+        }
 
         try {
-            const cameraData = {
-                rtspUrl: rtspUrl,
-                sourceKey: sourceKey,
-                lastAccessed: new Date(),
-                checkTimeout: null
-            };
+            const cameraData = { rtspUrl, sourceKey, lastAccessed: new Date(), checkTimeout: null };
             this.cameras.set(cameraKey, cameraData);
 
-            // 3. Handle RTSP source sharing based on URL + Quality
             let source = this.rtspSources.get(sourceKey);
-
             if (source) {
-                console.log(`[StreamManager] Source sharing: camera ${cameraId} (${quality}) joining existing ffmpeg for ${sourceKey.split('@')[1] || sourceKey}`);
                 source.cameras.add(cameraKey);
             } else {
-                console.log(`[StreamManager] Source init: new ffmpeg for ${sourceKey.split('@')[1] || sourceKey} (${quality})`);
-
+                console.log(`[StreamManager] Primary: Spawning FFmpeg for ${sourceKey.split('@')[1] || sourceKey}`);
                 source = {
                     ffmpeg: null,
-                    width: quality === 'ultra' ? 1920 : (quality === 'low' ? 640 : 1280),
-                    height: quality === 'ultra' ? 1080 : (quality === 'low' ? 480 : 720),
+                    width: quality === 'ultra' ? 1600 : (quality === 'low' ? 640 : 1280),
+                    height: quality === 'ultra' ? 900 : (quality === 'low' ? 480 : 720),
                     cameras: new Set([cameraKey]),
                     inputStreamStarted: false,
-                    isFixedResolution: true // Flag to prevent auto-detection from overwriting forced scale
                 };
                 this.rtspSources.set(sourceKey, source);
 
-                // Optimization: Use separate args for high/low quality
+
                 const ffmpegArgs = [
                     '-rtsp_transport', 'tcp',
                     '-i', rtspUrl,
                     '-f', 'mpegts',
                     '-codec:v', 'mpeg1video',
-                    '-bf', '0', // Disable B-frames for lower latency
-                    '-threads', 'auto' // Use auto threads for better performance
+                    '-bf', '0',
+                    '-threads', 'auto',
+                    '-an'
                 ];
 
-                ffmpegArgs.push('-an'); // Disable audio
-
                 if (quality === 'low') {
-                    // Optimized for dashboard cards: lower resolution but stable bitrate
-                    ffmpegArgs.push(
-                        '-s', '320x240',
-                        '-r', '25',
-                        '-b:v', '1000k',
-                        '-maxrate', '1000k',
-                        '-bufsize', '2000k',
-                        '-q:v', '4'
-                    );
+                    ffmpegArgs.push('-s', '320x240', '-r', '25', '-b:v', '1000k', '-maxrate', '1000k', '-bufsize', '2000k', '-q:v', '4');
                 } else if (quality === 'ultra') {
-                    // Ultra High quality for clear image (1080p)
-                    ffmpegArgs.push(
-                        '-s', '1920x1080',
-                        '-r', '20',
-                        '-b:v', '4000k',
-                        '-maxrate', '5000k',
-                        '-bufsize', '8000k',
-                    );
+                    ffmpegArgs.push('-s', '1280x720', '-r', '20', '-b:v', '4000k', '-maxrate', '5000k', '-bufsize', '8000k');
                 } else {
-                    // Balanced HD quality (720p)
-                    ffmpegArgs.push(
-                        '-s', '1280x720',
-                        '-r', '20',
-                        '-b:v', '2000k',
-                        '-maxrate', '2500k',
-                        '-bufsize', '4000k',
-                    );
+                    ffmpegArgs.push('-s', '1280x720', '-r', '20', '-b:v', '2000k', '-maxrate', '2500k', '-bufsize', '4000k');
                 }
 
-                ffmpegArgs.push('-'); // Output to stdout
+                ffmpegArgs.push('-');
 
                 const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { detached: false });
                 source.ffmpeg = ffmpeg;
 
                 ffmpeg.stdout.on('data', (data) => {
-                    const currentSource = this.rtspSources.get(sourceKey);
-                    if (!currentSource) return;
-
-                    if (!currentSource.inputStreamStarted) {
-                        currentSource.inputStreamStarted = true;
-                    }
-
-                    // Broadcast to ALL associated WebSocket clients
-                    for (const camKey of currentSource.cameras) {
-                        const cameraClients = this.clients.get(camKey);
-                        if (cameraClients && cameraClients.size > 0) {
-                            // Clear timeout for first data
-                            const cam = this.cameras.get(camKey);
-                            if (cam && cam.checkTimeout) {
-                                clearTimeout(cam.checkTimeout);
-                                cam.checkTimeout = null;
-                            }
-
-                            cameraClients.forEach(client => {
-                                if (client.readyState === WebSocket.OPEN) {
-                                    client.send(data, { binary: true });
+                    source.inputStreamStarted = true;
+                    // Optimized: Only send to workers that actually have clients for these cameras
+                    for (const camKey of source.cameras) {
+                        const subs = this.workerSubscriptions.get(camKey);
+                        if (subs) {
+                            for (const workerId of subs) {
+                                const worker = cluster.workers[workerId];
+                                if (worker && worker.isConnected()) {
+                                    worker.send({ type: 'STREAM_DATA', cameraKey: camKey, data });
                                 }
-                            });
+                            }
                         }
                     }
                 });
 
                 ffmpeg.stderr.on('data', (data) => {
-                    const str = data.toString();
-
-                    // Log everything until the stream starts so we can see connection errors
                     if (!source.inputStreamStarted) {
-                        console.log(`[StreamManager][ffmpeg-log] ${str.trim()}`);
-
+                        const str = data.toString();
                         const sizeMatch = str.match(/(\d{2,5})x(\d{2,5})/);
-                        if (sizeMatch && !source.isFixedResolution) {
+                        if (sizeMatch) {
                             source.width = parseInt(sizeMatch[1], 10);
                             source.height = parseInt(sizeMatch[2], 10);
-                            console.log(`[StreamManager] Auto-detected dimensions: ${source.width}x${source.height} for source ${sourceKey}`);
                         }
                     }
                 });
 
-                ffmpeg.on('exit', (code) => {
-                    console.log(`[StreamManager] ffmpeg exited (code ${code}) for source ${sourceKey}`);
-                    this._killSource(sourceKey);
-                });
+                ffmpeg.on('exit', () => this._killSource(sourceKey));
             }
 
-
-            // 5. Resilience: If no data arrives from ffmpeg for this specific camera launch
             cameraData.checkTimeout = setTimeout(() => {
-                if (this.cameras.has(cameraKey)) {
-                    const s = this.rtspSources.get(sourceKey);
-                    if (!s || !s.inputStreamStarted) {
-                        console.warn(`[StreamManager] No data for camera ${cameraId} (${quality}). Cleaning up.`);
-                        this.stopStream(cameraKey);
-                    }
-                }
+                const s = this.rtspSources.get(sourceKey);
+                if (!s || !s.inputStreamStarted) this.stopStream(cameraKey);
             }, this.CONNECTION_TIMEOUT);
 
             return this.wsPort;
@@ -240,23 +263,16 @@ class StreamManager {
         }
     }
 
-    /**
-     * Stop a camera stream. Kills ffmpeg if it was the last camera using it.
-     */
     stopStream(cameraKey) {
+        if (cluster.isWorker) {
+            process.send({ type: 'STOP_STREAM', cameraKey });
+            return;
+        }
+
         const cam = this.cameras.get(cameraKey);
         if (!cam) return;
 
-        console.log(`[StreamManager] stopping camera key ${cameraKey}`);
-
         if (cam.checkTimeout) clearTimeout(cam.checkTimeout);
-
-        // Disconnect all clients for this camera
-        const cameraClients = this.clients.get(cameraKey);
-        if (cameraClients) {
-            cameraClients.forEach(socket => socket.close());
-            this.clients.delete(cameraKey);
-        }
 
         const sourceKey = cam.sourceKey;
         this.cameras.delete(cameraKey);
@@ -264,9 +280,7 @@ class StreamManager {
         const source = this.rtspSources.get(sourceKey);
         if (source) {
             source.cameras.delete(cameraKey);
-            if (source.cameras.size === 0) {
-                this._killSource(sourceKey);
-            }
+            if (source.cameras.size === 0) this._killSource(sourceKey);
         }
     }
 
@@ -274,37 +288,29 @@ class StreamManager {
         const source = this.rtspSources.get(sourceKey);
         if (!source) return;
 
-        console.log(`[StreamManager] killing source for ${sourceKey.split('@')[1] || sourceKey}`);
         if (source.ffmpeg) {
             try { source.ffmpeg.kill('SIGTERM'); } catch (e) { }
         }
 
-        // Clean up any remaining cameras tied to this source
         for (const camKey of source.cameras) {
             const cam = this.cameras.get(camKey);
-            if (cam) {
-                if (cam.checkTimeout) clearTimeout(cam.checkTimeout);
-                // Disconnect clients
-                const cameraClients = this.clients.get(camKey);
-                if (cameraClients) {
-                    cameraClients.forEach(s => s.close());
-                    this.clients.delete(camKey);
-                }
-                this.cameras.delete(camKey);
-            }
+            if (cam && cam.checkTimeout) clearTimeout(cam.checkTimeout);
+            this.cameras.delete(camKey);
         }
 
         this.rtspSources.delete(sourceKey);
     }
 
     stopAllStreams() {
-        console.log(`[StreamManager] stopping all streams`);
-        for (const url of Array.from(this.rtspSources.keys())) {
-            this._killSource(url);
+        if (cluster.isPrimary) {
+            for (const url of Array.from(this.rtspSources.keys())) {
+                this._killSource(url);
+            }
         }
     }
 
     cleanupIdleStreams(timeoutMs = 10 * 60 * 1000) {
+        if (!cluster.isPrimary) return;
         const now = new Date();
         for (const [camKey, cam] of this.cameras.entries()) {
             if (now - cam.lastAccessed > timeoutMs) {
@@ -315,6 +321,9 @@ class StreamManager {
 }
 
 const streamManager = new StreamManager();
-setInterval(() => streamManager.cleanupIdleStreams(), 5 * 60 * 1000);
+if (cluster.isPrimary) {
+    setInterval(() => streamManager.cleanupIdleStreams(), 5 * 60 * 1000);
+}
 
 module.exports = streamManager;
+
