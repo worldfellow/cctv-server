@@ -7,6 +7,7 @@ const STREAM_MAGIC_BYTES = 'jsmp';
 const DEFAULT_WIDTH = 640;
 const DEFAULT_HEIGHT = 480;
 
+
 class StreamManager {
     constructor() {
         // Shared state (Primary only)
@@ -18,8 +19,8 @@ class StreamManager {
         this.clients = new Map(); // cameraKey -> Set<WebSocket>
 
         this.wsPort = 9999;
-        this.CONNECTION_TIMEOUT = 15000;
-        this.MAX_STREAMS = 20; // Hard limit for server stability
+        this.CONNECTION_TIMEOUT = 30000;
+        this.MAX_STREAMS = 25; // Safety limit
     }
 
     /**
@@ -34,18 +35,16 @@ class StreamManager {
             if (msg.type === 'START_STREAM') {
                 const { cameraId, rtspUrl, quality } = msg.data;
                 const cameraKey = `${cameraId}_${quality}`;
-                console.log(`[StreamManager] Primary: Worker ${worker.id} requesting stream ${cameraKey}`);
-
+                
                 if (!this.workerSubscriptions.has(cameraKey)) {
                     this.workerSubscriptions.set(cameraKey, new Set());
                 }
                 this.workerSubscriptions.get(cameraKey).add(worker.id);
-
+                
                 this.startStream(cameraId, rtspUrl, quality);
             }
             if (msg.type === 'STOP_STREAM') {
                 const { cameraKey } = msg;
-                console.log(`[StreamManager] Primary: Worker ${worker.id} stopping stream ${cameraKey}`);
                 const subs = this.workerSubscriptions.get(cameraKey);
                 if (subs) {
                     subs.delete(worker.id);
@@ -54,6 +53,11 @@ class StreamManager {
                         this.stopStream(cameraKey);
                     }
                 }
+            }
+            if (msg.type === 'HEARTBEAT') {
+                const { cameraKey } = msg;
+                const cam = this.cameras.get(cameraKey);
+                if (cam) cam.lastAccessed = new Date();
             }
         });
 
@@ -71,9 +75,6 @@ class StreamManager {
         });
     }
 
-    /**
-     * ATTACH TO SERVER (Worker): Handle WebSocket connections and IPC data
-     */
     attach(server) {
         if (cluster.isPrimary) return;
 
@@ -113,10 +114,23 @@ class StreamManager {
                     cameraClients.delete(socket);
                     if (cameraClients.size === 0) {
                         this.clients.delete(cameraKey);
+                        if (this.heartbeatIntervals?.has(cameraKey)) {
+                            clearInterval(this.heartbeatIntervals.get(cameraKey));
+                            this.heartbeatIntervals.delete(cameraKey);
+                        }
                         process.send({ type: 'STOP_STREAM', cameraKey });
                     }
                 }
             });
+
+            // Start heartbeat to keep Primary from evicting this stream
+            if (!this.heartbeatIntervals) this.heartbeatIntervals = new Map();
+            if (!this.heartbeatIntervals.has(cameraKey)) {
+                const interval = setInterval(() => {
+                    process.send({ type: 'HEARTBEAT', cameraKey });
+                }, 30000); // Every 30s
+                this.heartbeatIntervals.set(cameraKey, interval);
+            }
         });
 
         process.on('message', (msg) => {
@@ -151,36 +165,45 @@ class StreamManager {
             return this.wsPort;
         }
 
-        // Enforcement: Limit concurrent streams
+        console.log(`[StreamManager] INITIALIZING camera ${cameraId} with quality ${quality}`);
+
+        // Enhanced Eviction: Only evict if truly needed, and prioritize those with 0 current worker subs
         if (this.rtspSources.size >= this.MAX_STREAMS && !this.rtspSources.has(sourceKey)) {
-            console.log(`[StreamManager] Max sources reached (${this.MAX_STREAMS}). Evicting least active source...`);
-
-            let sourceToEvict = null;
-            let oldestOverallActivity = new Date();
-
-            for (const [sKey, source] of this.rtspSources.entries()) {
-                // Find the newest activity for THIS source's cameras
-                let newestForSource = new Date(0);
-                for (const cKey of source.cameras) {
-                    const cam = this.cameras.get(cKey);
-                    if (cam && cam.lastAccessed > newestForSource) newestForSource = cam.lastAccessed;
-                }
-
-                // We want to find the source whose "newest activity" is the oldest among all sources
-                if (newestForSource < oldestOverallActivity) {
-                    oldestOverallActivity = newestForSource;
-                    sourceToEvict = sKey;
+            console.warn(`[StreamManager] Max sources reached (${this.MAX_STREAMS}). Evaluating eviction...`);
+            
+            let targetKey = null;
+            // First attempt: find any camera with 0 worker subscriptions
+            for (const [key, subs] of this.workerSubscriptions.entries()) {
+                if (subs.size === 0) {
+                    targetKey = key;
+                    break;
                 }
             }
 
-            if (sourceToEvict) {
-                console.log(`[StreamManager] Evicting source: ${sourceToEvict.split('@')[1] || sourceToEvict}`);
-                this._killSource(sourceToEvict);
+            // Second attempt: oldest accessed that doesn't belong to the current source
+            if (!targetKey) {
+                let oldestDate = new Date();
+                for (const [key, cam] of this.cameras.entries()) {
+                    if (cam.lastAccessed < oldestDate) {
+                        oldestDate = cam.lastAccessed;
+                        targetKey = key;
+                    }
+                }
+            }
+
+            if (targetKey) {
+                console.log(`[StreamManager] Evicting stream ${targetKey} to make room.`);
+                this.stopStream(targetKey);
             }
         }
 
         try {
-            const cameraData = { rtspUrl, sourceKey, lastAccessed: new Date(), checkTimeout: null };
+            const cameraData = {
+                rtspUrl: rtspUrl,
+                sourceKey: sourceKey,
+                lastAccessed: new Date(),
+                checkTimeout: null
+            };
             this.cameras.set(cameraKey, cameraData);
 
             let source = this.rtspSources.get(sourceKey);
@@ -190,8 +213,8 @@ class StreamManager {
                 console.log(`[StreamManager] Primary: Spawning FFmpeg for ${sourceKey.split('@')[1] || sourceKey}`);
                 source = {
                     ffmpeg: null,
-                    width: quality === 'ultra' ? 1600 : (quality === 'low' ? 640 : 1280),
-                    height: quality === 'ultra' ? 900 : (quality === 'low' ? 480 : 720),
+                    width: quality === 'ultra' ? 1280 : (quality === 'low' ? 640 : 1280),
+                    height: quality === 'ultra' ? 720 : (quality === 'low' ? 480 : 720),
                     cameras: new Set([cameraKey]),
                     inputStreamStarted: false,
                 };
@@ -209,9 +232,24 @@ class StreamManager {
                 ];
 
                 if (quality === 'low') {
-                    ffmpegArgs.push('-s', '320x240', '-r', '25', '-b:v', '1000k', '-maxrate', '1000k', '-bufsize', '2000k', '-q:v', '4');
+                    // Optimized for 20+ dashboard cards: Ultra-lightweight
+                    ffmpegArgs.push(
+                        '-s', '320x240',
+                        '-r', '20',
+                        '-b:v', '600k',
+                        '-maxrate', '600k',
+                        '-bufsize', '1200k',
+                        '-q:v', '6'
+                    );
                 } else if (quality === 'ultra') {
-                    ffmpegArgs.push('-s', '1280x720', '-r', '20', '-b:v', '4000k', '-maxrate', '5000k', '-bufsize', '8000k');
+                    // Ultra High quality for clear image (1080p)
+                    ffmpegArgs.push(
+                        '-s', '1280x720',
+                        '-r', '20',
+                        '-b:v', '4000k',
+                        '-maxrate', '5000k',
+                        '-bufsize', '8000k',
+                    );
                 } else {
                     ffmpegArgs.push('-s', '1280x720', '-r', '20', '-b:v', '2000k', '-maxrate', '2500k', '-bufsize', '4000k');
                 }
@@ -248,7 +286,34 @@ class StreamManager {
                     }
                 });
 
-                ffmpeg.on('exit', () => this._killSource(sourceKey));
+                ffmpeg.on('exit', (code) => {
+                    console.log(`[StreamManager] FFmpeg exited (code ${code}) for ${sourceKey.split('@')[1] || sourceKey}`);
+                    
+                    // AUTO-RECOVERY: If workers are still subscribed, attempt restart after 2 seconds
+                    const hasActiveSubscribers = Array.from(source.cameras).some(camKey => {
+                        const subs = this.workerSubscriptions.get(camKey);
+                        return subs && subs.size > 0;
+                    });
+
+                    this.rtspSources.delete(sourceKey);
+
+                    if (hasActiveSubscribers) {
+                        console.log(`[StreamManager] Recovering crashed stream for ${sourceKey}...`);
+                        setTimeout(() => {
+                           for (const camKey of source.cameras) {
+                               const cam = this.cameras.get(camKey);
+                               if (cam) {
+                                   this.cameras.delete(camKey); // Clear entry to allow re-init
+                                   const cameraId = camKey.split('_')[0];
+                                   const quality = camKey.split('_')[1];
+                                   this.startStream(cameraId, cam.rtspUrl, quality);
+                               }
+                           }
+                        }, 2000);
+                    } else {
+                        this._killSource(sourceKey);
+                    }
+                });
             }
 
             cameraData.checkTimeout = setTimeout(() => {
@@ -309,11 +374,13 @@ class StreamManager {
         }
     }
 
-    cleanupIdleStreams(timeoutMs = 10 * 60 * 1000) {
+    cleanupIdleStreams(timeoutMs = 60 * 60 * 1000) { // Increased to 1 hour since heartbeat handles it better
         if (!cluster.isPrimary) return;
         const now = new Date();
         for (const [camKey, cam] of this.cameras.entries()) {
-            if (now - cam.lastAccessed > timeoutMs) {
+            const subs = this.workerSubscriptions.get(camKey);
+            // Only cleanup if it's both old AND has no active workers
+            if (now - cam.lastAccessed > timeoutMs && (!subs || subs.size === 0)) {
                 this.stopStream(camKey);
             }
         }
