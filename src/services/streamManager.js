@@ -240,6 +240,22 @@ class StreamManager {
         }
     }
 
+    restartStream(cameraId, rtspUrl, quality = 'high') {
+        const cameraKey = `${cameraId}_${quality}`;
+        console.log(`[StreamManager] RESTARTING stream for ${cameraKey}`);
+        
+        // Stop the existing stream for this camera key
+        this.stopStream(cameraKey);
+        
+        // Wait a small bit and start it again
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                const wsPort = this.startStream(cameraId, rtspUrl, quality);
+                resolve(wsPort);
+            }, 1000);
+        });
+    }
+
     _killSource(sourceKey) {
         const source = this.rtspSources.get(sourceKey);
         if (!source) return;
