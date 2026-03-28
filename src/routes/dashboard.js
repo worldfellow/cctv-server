@@ -99,4 +99,37 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 });
 
+// Restart a specific camera stream
+router.post('/restart-stream/:id', authMiddleware, async (req, res) => {
+    try {
+        const cameraId = req.params.id;
+        const quality = req.query.quality || 'low'; // Default to low for dashboard
+        
+        const camera = await Camera.findByPk(cameraId);
+        if (!camera) {
+            return res.status(404).json({ message: 'Camera not found' });
+        }
+
+        const rawUsername = decrypt(camera.username) || '';
+        const rawPassword = decrypt(camera.password) || '';
+        const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
+
+        console.log(`[Dashboard] Request to restart stream for camera ${cameraId} (${quality})`);
+        
+        await streamManager.restartStream(cameraId, rtspUrl, quality);
+
+        const host = req.get('host') || 'localhost';
+        const protocol = (req.get('X-Forwarded-Proto') || req.protocol) === 'https' ? 'wss' : 'ws';
+        const wsUrl = `${protocol}://${host}/api/stream/${cameraId}_${quality}`;
+
+        res.json({ 
+            message: 'Stream restart initiated', 
+            wsUrl: wsUrl 
+        });
+    } catch (error) {
+        console.error('Error restarting stream:', error);
+        res.status(500).json({ message: 'Error restarting stream' });
+    }
+});
+
 module.exports = router;
