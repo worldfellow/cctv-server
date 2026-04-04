@@ -14,7 +14,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Create a camera
 router.post('/', authMiddleware, async (req, res) => {
     try {
-        const { collegeId, name, location, ipAddress, rtspPort, channel, username, password, isActive } = req.body;
+        const { collegeId, name, location, ipAddress, rtspPort, channel, username, password, isActive, deviceId } = req.body;
 
         // Validate college
         const college = await College.findByPk(collegeId);
@@ -31,7 +31,8 @@ router.post('/', authMiddleware, async (req, res) => {
             channel,
             username: encrypt(username), // Encrypt sensitive info
             password: encrypt(password), // Encrypt sensitive info
-            isActive: isActive !== undefined ? isActive : true
+            isActive: isActive !== undefined ? isActive : true,
+            deviceId: deviceId || null
         });
 
         // Send back unencrypted credentials for the UI
@@ -451,7 +452,10 @@ router.get('/', authMiddleware, async (req, res) => {
             limit,
             offset,
             order: [['createdAt', 'DESC']],
-            include: [{ model: College, attributes: ['name'] }]
+            include: [
+                { model: College, attributes: ['name'] },
+                { model: require('../models').Device, attributes: ['deviceName', 'rtspLink'] }
+            ]
         });
 
         const formattedData = rows.map(camera => {
@@ -470,6 +474,8 @@ router.get('/', authMiddleware, async (req, res) => {
                 thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop', // Placeholder thumbnail
                 collegeId: camera.collegeId,
                 collegeName: camera.College ? camera.College.name : null,
+                deviceId: camera.deviceId,
+                deviceName: camera.Device ? camera.Device.deviceName : null,
                 username: rawUsername,
                 password: rawPassword,
                 createdAt: camera.createdAt,
@@ -498,7 +504,21 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
 
         const rawUsername = decrypt(camera.username) || '';
         const rawPassword = decrypt(camera.password) || '';
-        const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
+
+        let rtspUrl = ``;
+
+        // If the camera is linked to a hardware device, use its RTSP link template
+        if (camera.deviceId) {
+            const device = await require('../models').Device.findByPk(camera.deviceId);
+            if (device && device.rtspLink) {
+                rtspUrl = device.rtspLink
+                    .replace(/\$userTemplate/g, rawUsername)
+                    .replace(/\$passwordTemplate/g, rawPassword)
+                    .replace(/\$ipTemplate/g, camera.ipAddress)
+                    .replace(/\$portTemplate/g, camera.rtspPort.toString())
+                    .replace(/\$channelTemplate/g, camera.channel);
+            }
+        }
 
         const quality = req.query.quality || 'high';
         // Start stream and get the WebSocket port
@@ -522,7 +542,10 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
     try {
         const camera = await Camera.findByPk(req.params.id, {
-            include: [{ model: College, attributes: ['name'] }]
+            include: [
+                { model: College, attributes: ['name'] },
+                { model: require('../models').Device, attributes: ['deviceName', 'rtspLink'] }
+            ]
         });
 
         if (!camera) {
@@ -544,6 +567,8 @@ router.get('/:id', authMiddleware, async (req, res) => {
             thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop',
             collegeId: camera.collegeId,
             collegeName: camera.College ? camera.College.name : null,
+            deviceId: camera.deviceId,
+            deviceName: camera.Device ? camera.Device.deviceName : null,
             username: rawUsername,
             password: rawPassword,
             createdAt: camera.createdAt,
@@ -565,7 +590,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
             return res.status(404).json({ message: 'Camera not found' });
         }
 
-        const { name, location, ipAddress, rtspPort, channel, username, password, isActive } = req.body;
+        const { name, location, ipAddress, rtspPort, channel, username, password, isActive, deviceId } = req.body;
 
         const updateData = {};
         if (name) updateData.name = name;
@@ -576,6 +601,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
         if (username !== undefined) updateData.username = encrypt(username);
         if (password !== undefined) updateData.password = encrypt(password);
         if (isActive !== undefined) updateData.isActive = isActive;
+        if (deviceId !== undefined) updateData.deviceId = deviceId || null;
 
         await camera.update(updateData);
 

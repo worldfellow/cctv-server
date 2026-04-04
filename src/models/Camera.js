@@ -1,6 +1,7 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 const College = require('./College');
+const Device = require('./Device');
 
 const Camera = sequelize.define('Camera', {
     id: {
@@ -11,6 +12,10 @@ const Camera = sequelize.define('Camera', {
     collegeId: {
         type: DataTypes.UUID,
         allowNull: false
+    },
+    deviceId: {
+        type: DataTypes.UUID,
+        allowNull: true
     },
     name: {
         type: DataTypes.STRING,
@@ -63,6 +68,18 @@ Camera.belongsTo(College, {
 College.hasMany(Camera, {
     foreignKey: 'collegeId',
     onDelete: 'CASCADE',
+    onUpdate: 'CASCADE'
+});
+
+Camera.belongsTo(Device, {
+    foreignKey: 'deviceId',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+});
+
+Device.hasMany(Camera, {
+    foreignKey: 'deviceId',
+    onDelete: 'SET NULL',
     onUpdate: 'CASCADE'
 });
 

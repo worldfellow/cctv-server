@@ -58,8 +58,20 @@ router.get('/', authMiddleware, async (req, res) => {
             const rawPassword = decrypt(camera.password) || '';
 
             // Construct RTSP URL for streamManager
-            const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
-            
+            let rtspUrl = ``;
+
+            if (camera.deviceId) {
+                const device = await require('../models').Device.findByPk(camera.deviceId);
+                if (device && device.rtspLink) {
+                    rtspUrl = device.rtspLink
+                        .replace(/\$userTemplate/g, rawUsername)
+                        .replace(/\$passwordTemplate/g, rawPassword)
+                        .replace(/\$ipTemplate/g, camera.ipAddress)
+                        .replace(/\$portTemplate/g, camera.rtspPort.toString())
+                        .replace(/\$channelTemplate/g, camera.channel);
+                }
+            }
+
             let wsPort;
             try {
                 wsPort = streamManager.startStream(camera.id, rtspUrl, 'low');
@@ -79,7 +91,7 @@ router.get('/', authMiddleware, async (req, res) => {
                 wsUrl: wsPort ? `${protocol}://${host}/api/stream/${camera.id}_low` : null,
                 collegeName: camera.College ? camera.College.name : null
             });
-            
+
             // stagger delay to ensure clean process start
             if (rows.length > 1) {
                 await new Promise(resolve => setTimeout(resolve, 500));
@@ -104,7 +116,7 @@ router.post('/restart-stream/:id', authMiddleware, async (req, res) => {
     try {
         const cameraId = req.params.id;
         const quality = req.query.quality || 'low'; // Default to low for dashboard
-        
+
         const camera = await Camera.findByPk(cameraId);
         if (!camera) {
             return res.status(404).json({ message: 'Camera not found' });
@@ -112,19 +124,31 @@ router.post('/restart-stream/:id', authMiddleware, async (req, res) => {
 
         const rawUsername = decrypt(camera.username) || '';
         const rawPassword = decrypt(camera.password) || '';
-        const rtspUrl = `rtsp://${rawUsername}:${rawPassword}@${camera.ipAddress}:${camera.rtspPort}/Streaming/Channels/${camera.channel}`;
+        let rtspUrl = ``;
+
+        if (camera.deviceId) {
+            const device = await require('../models').Device.findByPk(camera.deviceId);
+            if (device && device.rtspLink) {
+                rtspUrl = device.rtspLink
+                    .replace(/\$userTemplate/g, rawUsername)
+                    .replace(/\$passwordTemplate/g, rawPassword)
+                    .replace(/\$ipTemplate/g, camera.ipAddress)
+                    .replace(/\$portTemplate/g, camera.rtspPort.toString())
+                    .replace(/\$channelTemplate/g, camera.channel);
+            }
+        }
 
         console.log(`[Dashboard] Request to restart stream for camera ${cameraId} (${quality})`);
-        
+
         await streamManager.restartStream(cameraId, rtspUrl, quality);
 
         const host = req.get('host') || 'localhost';
         const protocol = (req.get('X-Forwarded-Proto') || req.protocol) === 'https' ? 'wss' : 'ws';
         const wsUrl = `${protocol}://${host}/api/stream/${cameraId}_${quality}`;
 
-        res.json({ 
-            message: 'Stream restart initiated', 
-            wsUrl: wsUrl 
+        res.json({
+            message: 'Stream restart initiated',
+            wsUrl: wsUrl
         });
     } catch (error) {
         console.error('Error restarting stream:', error);
