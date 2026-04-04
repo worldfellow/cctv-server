@@ -5,6 +5,7 @@ const Camera = require('./Camera');
 const Role = require('./Role');
 const Screenshot = require('./Screenshot');
 const SystemConfig = require('./SystemConfig');
+const Device = require('./Device');
 
 const initDb = async () => {
     try {
@@ -69,8 +70,10 @@ const initDb = async () => {
         } catch (err) {
             console.warn('Failed to seed system configuration:', err.message);
         }
+        console.log('Database synchronized.');
     } catch (error) {
         console.error('Unable to connect to the database:', error);
+        console.error('Stack:', error.stack);
     }
 };
 
@@ -82,5 +85,6 @@ module.exports = {
     Role,
     Screenshot,
     SystemConfig,
+    Device,
     initDb
 };

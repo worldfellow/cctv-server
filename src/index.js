@@ -11,6 +11,7 @@ const cameraRoutes = require('./routes/cameras');
 const dashboardRoutes = require('./routes/dashboard');
 const screenshotRoutes = require('./routes/screenshots');
 const configRoutes = require('./routes/config');
+const deviceRoutes = require('./routes/devices');
 const streamManager = require('./services/streamManager');
 
 dotenv.config();
@@ -36,6 +37,7 @@ app.use('/api/cameras', cameraRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/devices', deviceRoutes);
 
 // Serve static files
 const uploadsPath = process.env.FILE_LOCATION;
