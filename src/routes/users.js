@@ -861,4 +861,40 @@ router.post('/bulk-permissions', authMiddleware, async (req, res) => {
     }
 });
 
+// Change password for logged in user
+router.post('/update-profile-password', authMiddleware, async (req, res) => {
+    try {
+        const { newPassword } = req.body;
+        const userId = req.user.id;
+
+        if (!newPassword) {
+            return res.status(400).json({ message: 'New password is required' });
+        }
+
+        const user = await User.findByPk(userId);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (!user.keycloakId) {
+            return res.status(400).json({ message: 'User has no Keycloak account' });
+        }
+
+        // Update password in Keycloak
+        await keycloakService.resetPassword(user.keycloakId, newPassword);
+
+        // Update hashed password in local DB
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        await user.update({
+            password: hashedPassword,
+            mustChangePassword: false
+        });
+
+        res.json({ message: 'Password updated successfully' });
+    } catch (error) {
+        console.error('Error updating profile password:', error);
+        res.status(500).json({ message: 'Error updating password' });
+    }
+});
+
 module.exports = router;

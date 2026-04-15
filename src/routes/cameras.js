@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Camera, College } = require('../models');
+const { Camera, College, Device } = require('../models');
 const { encrypt, decrypt } = require('../utils/crypto');
 const authMiddleware = require('../middleware/auth');
 const { Op } = require('sequelize');
@@ -70,6 +70,12 @@ router.get('/template/download', authMiddleware, async (req, res) => {
             configSheet.getCell(`B${index + 1}`).value = status;
         });
 
+        // Add devices to Config sheet
+        const devices = await Device.findAll({ attributes: ['deviceName'] });
+        devices.forEach((device, index) => {
+            configSheet.getCell(`C${index + 1}`).value = device.deviceName;
+        });
+
         // Add headers to main sheet
         sheet.columns = [
             { header: 'College Name', key: 'collegeName', width: 30 },
@@ -80,12 +86,14 @@ router.get('/template/download', authMiddleware, async (req, res) => {
             { header: 'Channel', key: 'channel', width: 15 },
             { header: 'Username', key: 'username', width: 20 },
             { header: 'Password', key: 'password', width: 20 },
-            { header: 'Status', key: 'status', width: 15 }
+            { header: 'Status', key: 'status', width: 15 },
+            { header: 'Device', key: 'deviceName', width: 20 }
         ];
 
         const collegeCount = colleges.length || 1;
 
         // Apply validation to 100 rows
+        const deviceCount = devices.length || 1;
         for (let i = 2; i <= 101; i++) {
             if (colleges.length > 0) {
                 sheet.getCell(`A${i}`).dataValidation = {
@@ -99,6 +107,13 @@ router.get('/template/download', authMiddleware, async (req, res) => {
                 allowBlank: true,
                 formulae: [`Config!$B$1:$B$2`]
             };
+            if (devices.length > 0) {
+                sheet.getCell(`J${i}`).dataValidation = {
+                    type: 'list',
+                    allowBlank: true,
+                    formulae: [`Config!$C$1:$C$${deviceCount}`]
+                };
+            }
         }
 
         // Add a sample row (optional)
@@ -148,6 +163,12 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
             collegeMap[c.name.trim().toLowerCase()] = c.id;
         });
 
+        const devices = await Device.findAll();
+        const deviceMap = {};
+        devices.forEach(d => {
+            deviceMap[d.deviceName.trim().toLowerCase()] = d.id;
+        });
+
         const camerasToCreate = [];
         const errors = [];
 
@@ -163,6 +184,7 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
             const username = row.getCell(7).value?.toString().trim();
             const password = row.getCell(8).value?.toString().trim();
             const status = row.getCell(9).value?.toString().trim() || 'Active';
+            const deviceName = row.getCell(10).value?.toString().trim();
 
             // Skip entirely empty rows
             if (!collegeName && !ipAddress && !username && !cameraName) return;
@@ -178,6 +200,8 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                 return;
             }
 
+            const deviceId = deviceName ? deviceMap[deviceName.toLowerCase()] : null;
+
             camerasToCreate.push({
                 collegeId,
                 name: cameraName,
@@ -187,7 +211,8 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
                 channel,
                 username: encrypt(username),
                 password: encrypt(password),
-                isActive: status.toLowerCase() === 'active'
+                isActive: status.toLowerCase() === 'active',
+                deviceId: deviceId || null
             });
         });
 
@@ -223,7 +248,10 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
 
         const cameras = await Camera.findAll({
             where: whereClause,
-            include: [{ model: College, attributes: ['name'] }],
+            include: [
+                { model: College, attributes: ['name'] },
+                { model: Device, attributes: ['deviceName'] }
+            ],
             order: [['collegeId', 'ASC'], ['name', 'ASC']]
         });
 
@@ -244,6 +272,11 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
             configSheet.getCell(`B${index + 1}`).value = status;
         });
 
+        const devicesForList = await Device.findAll({ attributes: ['deviceName'] });
+        devicesForList.forEach((device, index) => {
+            configSheet.getCell(`C${index + 1}`).value = device.deviceName;
+        });
+
         // Add headers
         sheet.columns = [
             { header: 'Camera ID', key: 'id', width: 15 },
@@ -255,7 +288,8 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
             { header: 'Channel', key: 'channel', width: 15 },
             { header: 'Username', key: 'username', width: 20 },
             { header: 'Password', key: 'password', width: 20 },
-            { header: 'Status', key: 'status', width: 15 }
+            { header: 'Status', key: 'status', width: 15 },
+            { header: 'Device', key: 'deviceName', width: 20 }
         ];
 
         // Format Header
@@ -278,7 +312,8 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
                 channel: camera.channel,
                 username: decrypt(camera.username),
                 password: decrypt(camera.password),
-                status: camera.isActive ? 'Active' : 'Inactive'
+                status: camera.isActive ? 'Active' : 'Inactive',
+                deviceName: camera.Device ? camera.Device.deviceName : ''
             });
         });
 
@@ -299,6 +334,13 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
                 allowBlank: true,
                 formulae: [`Config!$B$1:$B$2`]
             };
+            if (devicesForList.length > 0) {
+                sheet.getCell(`K${i}`).dataValidation = {
+                    type: 'list',
+                    allowBlank: true,
+                    formulae: [`Config!$C$1:$C$${devicesForList.length}`]
+                };
+            }
         }
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -333,6 +375,12 @@ router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, r
             collegeMap[c.name.trim().toLowerCase()] = c.id;
         });
 
+        const devices = await Device.findAll();
+        const deviceMap = {};
+        devices.forEach(d => {
+            deviceMap[d.deviceName.trim().toLowerCase()] = d.id;
+        });
+
         const updates = [];
         const creates = [];
         const errors = [];
@@ -350,6 +398,7 @@ router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, r
             const username = row.getCell(8).value?.toString().trim();
             const password = row.getCell(9).value?.toString().trim();
             const status = row.getCell(10).value?.toString().trim() || 'Active';
+            const deviceName = row.getCell(11).value?.toString().trim();
 
             // Skip entirely empty rows
             if (!id && !collegeName && !ipAddress && !cameraName) return;
@@ -368,7 +417,8 @@ router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, r
                 ipAddress,
                 rtspPort,
                 channel,
-                isActive: status.toLowerCase() === 'active'
+                isActive: status.toLowerCase() === 'active',
+                deviceId: deviceName ? deviceMap[deviceName.toLowerCase()] : null
             };
 
             // Only update credentials if provided
@@ -590,7 +640,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
             return res.status(404).json({ message: 'Camera not found' });
         }
 
-        const { name, location, ipAddress, rtspPort, channel, username, password, isActive, deviceId } = req.body;
+        const { name, location, ipAddress, rtspPort, channel, username, password, isActive, deviceId, collegeId } = req.body;
 
         const updateData = {};
         if (name) updateData.name = name;
@@ -602,6 +652,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
         if (password !== undefined) updateData.password = encrypt(password);
         if (isActive !== undefined) updateData.isActive = isActive;
         if (deviceId !== undefined) updateData.deviceId = deviceId || null;
+        if (collegeId !== undefined) updateData.collegeId = collegeId || null;
 
         await camera.update(updateData);
 
