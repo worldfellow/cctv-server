@@ -70,6 +70,7 @@ module.exports = async (req, res, next) => {
                 email: user.email,
                 role: user.role,
                 keycloakId: user.keycloakId,
+                permissions: user.permissions || { menus: ['dashboard'], actions: [] },
                 allowedColleges: user.allowedColleges || []
             };
             next();
