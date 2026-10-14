@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
@@ -39,11 +40,9 @@ app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/devices', deviceRoutes);
 
-// Serve static files
-const uploadsPath = process.env.FILE_LOCATION;
-if (uploadsPath) {
-  app.use('/api/uploads', express.static(uploadsPath));
-}
+// Serve static files (same fallback folder the logo upload in routes/config.js writes to)
+const uploadsPath = process.env.FILE_LOCATION || path.join(__dirname, '../../uploads');
+app.use('/api/uploads', express.static(uploadsPath));
 
 const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
