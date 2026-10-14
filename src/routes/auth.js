@@ -17,13 +17,17 @@ router.post('/keycloak-login', async (req, res) => {
     const realm = process.env.KEYCLOAK_REALM;
     const tokenUrl = `${baseUrl}/realms/${realm}/protocol/openid-connect/token`;
 
-    // Use the PUBLIC client (Direct Access Grants enabled) for user password logins.
-    // This is separate from KEYCLOAK_CLIENT_ID which is the confidential service-account client.
-    const publicClientId = process.env.KEYCLOAK_PUBLIC_CLIENT_ID || process.env.KEYCLOAK_CLIENT_ID;
+    // KEYCLOAK_CLIENT_ID (cctv-server) is a confidential client: Keycloak rejects
+    // the login unless its client secret is sent along.
+    if (!process.env.KEYCLOAK_CLIENT_SECRET) {
+        console.error('Keycloak login: KEYCLOAK_CLIENT_SECRET is not set in .env');
+        return res.status(500).json({ error: 'server_misconfigured', message: 'Login is not configured on the server' });
+    }
 
     const body = new URLSearchParams({
         grant_type: 'password',
-        client_id: publicClientId,
+        client_id: process.env.KEYCLOAK_CLIENT_ID,
+        client_secret: process.env.KEYCLOAK_CLIENT_SECRET,
         username: email,
         password,
         scope: 'openid'
