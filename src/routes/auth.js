@@ -17,10 +17,13 @@ router.post('/keycloak-login', async (req, res) => {
     const realm = process.env.KEYCLOAK_REALM;
     const tokenUrl = `${baseUrl}/realms/${realm}/protocol/openid-connect/token`;
 
+    // Use the PUBLIC client (Direct Access Grants enabled) for user password logins.
+    // This is separate from KEYCLOAK_CLIENT_ID which is the confidential service-account client.
+    const publicClientId = process.env.KEYCLOAK_PUBLIC_CLIENT_ID || process.env.KEYCLOAK_CLIENT_ID;
+
     const body = new URLSearchParams({
         grant_type: 'password',
-        client_id: process.env.KEYCLOAK_CLIENT_ID,
-        client_secret: process.env.KEYCLOAK_CLIENT_SECRET,
+        client_id: publicClientId,
         username: email,
         password,
         scope: 'openid'
