@@ -11,6 +11,150 @@ const multer = require('multer');
 // Configure multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
 
+// ─── CREATE SUPER ADMIN (no auth required — bootstrap endpoint) ───────────────
+// POST /api/users/create-super-admin
+// Body: { firstName, lastName, email }
+// Uses Keycloak service account to create user + assigns SUPER_ADMIN role.
+// Saves user in DB with allowedColleges: ['ALL'] (access to everything).
+// keycloakId is always returned in the response.
+router.post('/create-super-admin', async (req, res) => {
+    try {
+        const { firstName, lastName, email } = req.body;
+
+        // ── Security Guard 1: Bootstrap secret ────────────────────────────────
+        // Set BOOTSTRAP_SECRET in .env. Caller must pass it as a header:
+        //   X-Bootstrap-Secret: <value>
+        const bootstrapSecret = process.env.BOOTSTRAP_SECRET;
+        if (bootstrapSecret) {
+            const providedSecret = req.headers['x-bootstrap-secret'];
+            if (!providedSecret || providedSecret !== bootstrapSecret) {
+                return res.status(403).json({
+                    message: 'Forbidden: Invalid or missing bootstrap secret'
+                });
+            }
+        }
+
+
+        // Validate required fields
+        if (!firstName || !lastName || !email) {
+            return res.status(400).json({
+                message: 'Missing required fields: firstName, lastName, email'
+            });
+        }
+
+        // Basic email format check
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({ message: 'Invalid email format' });
+        }
+
+        const defaultPassword = process.env.DEFAULT_USER_PASSWORD || 'Welcome@123';
+
+
+        // ── Step 1: Sync with Keycloak via service account ────────────────────
+        // Done for BOTH new and existing users so keycloakId is always present.
+        let keycloakId = null;
+        try {
+            const existingKcUser = await keycloakService.findUserByEmail(email);
+
+            if (existingKcUser) {
+                keycloakId = existingKcUser.id;
+                console.log(`[create-super-admin] User ${email} already exists in Keycloak: ${keycloakId}`);
+            } else {
+                keycloakId = await keycloakService.createUser({
+                    firstName,
+                    lastName,
+                    email,
+                    password: defaultPassword
+                });
+                console.log(`[create-super-admin] Created user ${email} in Keycloak: ${keycloakId}`);
+            }
+
+            // Ensure SUPER_ADMIN role exists and assign it
+            const kcRole = await keycloakService.getOrCreateClientRole('SUPER_ADMIN');
+            await Role.findOrCreate({
+                where: { roleName: 'SUPER_ADMIN' },
+                defaults: { roleId: kcRole.id, roleName: 'SUPER_ADMIN' }
+            });
+            await keycloakService.assignClientRole(keycloakId, 'SUPER_ADMIN');
+            console.log(`[create-super-admin] SUPER_ADMIN role assigned in Keycloak for ${email}`);
+
+        } catch (kcError) {
+            console.error('[create-super-admin] Keycloak operation failed:', kcError);
+            return res.status(500).json({
+                message: 'Failed to create/configure user in Keycloak',
+                error: kcError.message
+            });
+        }
+
+        // ── Step 2: Check if user already exists locally — promote if so ──────
+        const existingLocalUser = await User.findOne({ where: { email } });
+        if (existingLocalUser) {
+            await existingLocalUser.update({
+                role: 'SUPER_ADMIN',
+                permissions: null,
+                allowedColleges: ['ALL'],
+                keycloakId  // ensure keycloakId is always linked
+            });
+
+            const updatedUser = await User.findByPk(existingLocalUser.id, {
+                attributes: { exclude: ['password'] }
+            });
+
+            return res.json({
+                message: 'Existing user promoted to SUPER_ADMIN with full college access',
+                keycloakId,  // explicit top-level field for convenience
+                user: updatedUser
+            });
+        }
+
+        // ── Step 3: Create new user in local database ─────────────────────────
+        // mobileNo is required & unique — generate a 10-digit timestamp placeholder.
+        const placeholderMobile = `${Date.now()}`.slice(-10);
+        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+        const newUser = await User.create({
+            firstName,
+            lastName,
+            email,
+            mobileNo: placeholderMobile,
+            password: hashedPassword,
+            role: 'SUPER_ADMIN',
+            keycloakId,
+            collegeId: null,
+            permissions: null,        // SUPER_ADMIN has no permission restrictions
+            allowedColleges: ['ALL'], // Full access to all colleges
+            mustChangePassword: true  // Force password change on first login
+        });
+
+        const userResponse = await User.findByPk(newUser.id, {
+            attributes: { exclude: ['password'] }
+        });
+
+        console.log(`[create-super-admin] SUPER_ADMIN created successfully: ${email}`);
+
+        return res.status(201).json({
+            message: 'Super Admin created successfully with access to all colleges',
+            defaultPassword,
+            keycloakId,  // explicit top-level field for convenience
+            note: 'User must change password on first login',
+            user: userResponse
+        });
+
+    } catch (error) {
+        console.error('[create-super-admin] Error:', error);
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            return res.status(409).json({
+                message: 'A user with this email or mobile number already exists'
+            });
+        }
+        return res.status(500).json({
+            message: 'Internal server error while creating Super Admin',
+            error: error.message
+        });
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 // API to save super_admin without authorization header
 router.post('/save-super-admin', async (req, res) => {
     try {
