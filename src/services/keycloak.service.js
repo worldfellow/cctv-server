@@ -13,16 +13,15 @@ class KeycloakService {
                 const { default: KcAdminClient } = await import('@keycloak/keycloak-admin-client');
                 this.kcAdminClient = new KcAdminClient({
                     baseUrl: process.env.KC_HOSTNAME || 'http://localhost:8083',
-                    realmName: 'master',
+                    realmName: process.env.KEYCLOAK_REALM,
                 });
             }
             await this.kcAdminClient.auth({
-                username: process.env.KEYCLOAK_ADMIN || 'admin',
-                password: process.env.KEYCLOAK_ADMIN_PASSWORD || 'admin',
-                grantType: 'password',
-                clientId: 'admin-cli',
+                grantType: 'client_credentials',
+                clientId: process.env.KEYCLOAK_CLIENT_ID,
+                clientSecret: process.env.KEYCLOAK_CLIENT_SECRET,
             });
-            console.log('Keycloak Admin Client initialized');
+            console.log('Keycloak Admin Client initialized using Service Account (client_credentials)');
         } catch (error) {
             console.error('Failed to initialize Keycloak Admin Client:', error);
             throw error;

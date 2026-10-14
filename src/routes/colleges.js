@@ -4,6 +4,19 @@ const { College, User } = require('../models');
 const authMiddleware = require('../middleware/auth');
 const { Op } = require('sequelize');
 
+// Middleware to check if user has permission to perform a specific action
+const checkActionPermission = (action) => {
+    return (req, res, next) => {
+        if (req.user.role === 'SUPER_ADMIN') {
+            return next();
+        }
+        if (req.user.permissions && req.user.permissions.actions && req.user.permissions.actions.includes(action)) {
+            return next();
+        }
+        return res.status(403).json({ message: `Access denied: Action permission '${action}' required.` });
+    };
+};
+
 // Get all colleges (paginated + search)
 router.get('/', authMiddleware, async (req, res) => {
     try {
@@ -55,7 +68,7 @@ const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Generate Excel Template for Bulk Upload of Colleges
-router.get('/template/download', authMiddleware, async (req, res) => {
+router.get('/template/download', authMiddleware, checkActionPermission('college_create'), async (req, res) => {
     try {
         const workbook = new exceljs.Workbook();
         const sheet = workbook.addWorksheet('Colleges');
@@ -86,7 +99,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
 });
 
 // Bulk Upload Colleges from Excel
-router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, res) => {
+router.post('/bulk-upload', authMiddleware, checkActionPermission('college_create'), upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ message: 'No file uploaded' });
@@ -192,7 +205,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 });
 
 // Create a college
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, checkActionPermission('college_create'), async (req, res) => {
     try {
         const { name, address, contactEmail } = req.body;
         const college = await College.create({ name, address, contactEmail });
@@ -206,7 +219,7 @@ router.post('/', authMiddleware, async (req, res) => {
 });
 
 // Update a college
-router.put('/:id', authMiddleware, async (req, res) => {
+router.put('/:id', authMiddleware, checkActionPermission('college_edit'), async (req, res) => {
     try {
         const college = await College.findByPk(req.params.id);
         if (!college) {
@@ -221,7 +234,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 });
 
 // Delete a college
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', authMiddleware, checkActionPermission('college_delete'), async (req, res) => {
     try {
         const college = await College.findByPk(req.params.id);
         if (!college) {
@@ -235,7 +248,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 });
 
 // Toggle college active/inactive status
-router.patch('/:id/toggle-status', authMiddleware, async (req, res) => {
+router.patch('/:id/toggle-status', authMiddleware, checkActionPermission('college_edit'), async (req, res) => {
     try {
         const college = await College.findByPk(req.params.id);
         if (!college) {
@@ -250,7 +263,7 @@ router.patch('/:id/toggle-status', authMiddleware, async (req, res) => {
 });
 
 // Bulk update college status (activate/deactivate)
-router.post('/bulk-status', authMiddleware, async (req, res) => {
+router.post('/bulk-status', authMiddleware, checkActionPermission('college_bulk'), async (req, res) => {
     try {
         const { ids, isActive } = req.body;
         if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -268,7 +281,7 @@ router.post('/bulk-status', authMiddleware, async (req, res) => {
 });
 
 // Bulk delete colleges
-router.post('/bulk-delete', authMiddleware, async (req, res) => {
+router.post('/bulk-delete', authMiddleware, checkActionPermission('college_bulk'), async (req, res) => {
     try {
         const { ids } = req.body;
         if (!ids || !Array.isArray(ids) || ids.length === 0) {

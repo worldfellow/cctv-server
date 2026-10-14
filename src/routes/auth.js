@@ -1,8 +1,53 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const axios = require('axios');
 const { User, College } = require('../models');
 const router = express.Router();
+
+// Keycloak login proxy: the browser never talks to Keycloak's token endpoint.
+// The server performs the grant with the confidential client's secret.
+router.post('/keycloak-login', async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+        return res.status(400).json({ error: 'invalid_request', message: 'Email and password are required' });
+    }
+
+    const baseUrl = process.env.KC_HOSTNAME;
+    const realm = process.env.KEYCLOAK_REALM;
+    const tokenUrl = `${baseUrl}/realms/${realm}/protocol/openid-connect/token`;
+
+    const body = new URLSearchParams({
+        grant_type: 'password',
+        client_id: process.env.KEYCLOAK_CLIENT_ID,
+        client_secret: process.env.KEYCLOAK_CLIENT_SECRET,
+        username: email,
+        password,
+        scope: 'openid'
+    });
+
+    try {
+        const { data } = await axios.post(tokenUrl, body.toString(), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        return res.json({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+            id_token: data.id_token,
+            expires_in: data.expires_in
+        });
+    } catch (error) {
+        if (error.response) {
+            const { status, data } = error.response;
+            return res.status(status).json({
+                error: data?.error,
+                error_description: data?.error_description
+            });
+        }
+        console.error('Keycloak login error:', error.message);
+        return res.status(502).json({ error: 'keycloak_unreachable', message: 'Authentication server unreachable' });
+    }
+});
 
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
