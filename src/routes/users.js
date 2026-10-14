@@ -618,7 +618,7 @@ router.post('/', authMiddleware, async (req, res) => {
             mobileNo,
             password: hashedPassword,
             role,
-            collegeId: collegeId === 'ALL' ? null : collegeId,
+            collegeId: (!collegeId || collegeId === 'ALL') ? null : collegeId,
             keycloakId,
             permissions: role === 'SUPER_ADMIN' ? null : defaultPermissions,
             allowedColleges: collegeId === 'ALL' ? ['ALL'] : (collegeId ? [collegeId] : [])
@@ -655,7 +655,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const actualCollegeId = collegeId === 'ALL' ? null : collegeId;
+        const actualCollegeId = (!collegeId || collegeId === 'ALL') ? null : collegeId;
         const allowedColleges = collegeId === 'ALL' ? ['ALL'] : (collegeId ? [collegeId] : []);
 
         const updateData = {
