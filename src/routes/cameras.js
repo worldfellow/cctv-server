@@ -354,6 +354,144 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
     }
 });
 
+// Analytics Report: per-college camera count + camera details (IP, port, credentials, company)
+router.get('/analytics-report', authMiddleware, async (req, res) => {
+    try {
+        const { collegeId } = req.query;
+        const whereClause = {};
+        if (collegeId) {
+            whereClause.collegeId = collegeId;
+        }
+
+        // Apply restrictions for non-SUPER_ADMIN users
+        if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
+            const allowed = req.user.allowedColleges || [];
+            if (collegeId) {
+                if (!allowed.includes(collegeId)) {
+                    return res.status(403).json({ message: 'Access denied to this college' });
+                }
+            } else {
+                whereClause.collegeId = { [Op.in]: allowed };
+            }
+        }
+
+        const cameras = await Camera.findAll({
+            where: whereClause,
+            include: [
+                { model: College, attributes: ['name'] },
+                { model: Device, attributes: ['deviceName'] }
+            ],
+            order: [[College, 'name', 'ASC'], ['name', 'ASC']]
+        });
+
+        // URL-encoded '@' (%40) is shown as '@' in the report
+        const decodeCredential = (value) => (decrypt(value) || '').replace(/%40/gi, '@');
+
+        // Group cameras by college
+        const collegeMap = new Map();
+        cameras.forEach(camera => {
+            const collegeName = camera.College ? camera.College.name : 'N/A';
+            if (!collegeMap.has(collegeName)) {
+                collegeMap.set(collegeName, []);
+            }
+            collegeMap.get(collegeName).push(camera);
+        });
+
+        const workbook = new exceljs.Workbook();
+        const headerStyle = (row) => {
+            row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+            row.alignment = { vertical: 'middle', horizontal: 'center' };
+        };
+
+        // Sheet 1: College Summary
+        const summarySheet = workbook.addWorksheet('College Summary');
+        summarySheet.columns = [
+            { header: 'S.No', key: 'sno', width: 8 },
+            { header: 'College Name', key: 'collegeName', width: 35 },
+            { header: 'No. of Cameras', key: 'total', width: 16 },
+            { header: 'Active', key: 'active', width: 10 },
+            { header: 'Inactive', key: 'inactive', width: 10 },
+            { header: 'Camera Names', key: 'cameraNames', width: 60 },
+            { header: 'Camera Company', key: 'companies', width: 25 }
+        ];
+        headerStyle(summarySheet.getRow(1));
+
+        let sno = 1;
+        collegeMap.forEach((list, collegeName) => {
+            const active = list.filter(c => c.isActive).length;
+            const companies = [...new Set(list.map(c => c.Device ? c.Device.deviceName : '').filter(Boolean))];
+            const row = summarySheet.addRow({
+                sno: sno++,
+                collegeName,
+                total: list.length,
+                active,
+                inactive: list.length - active,
+                cameraNames: list.map(c => c.name).join(', '),
+                companies: companies.join(', ') || 'N/A'
+            });
+            row.alignment = { vertical: 'top', wrapText: true };
+        });
+
+        const totalRow = summarySheet.addRow({
+            collegeName: 'Total',
+            total: cameras.length,
+            active: cameras.filter(c => c.isActive).length,
+            inactive: cameras.filter(c => !c.isActive).length
+        });
+        totalRow.font = { bold: true };
+
+        // Sheet 2: Camera Details
+        const detailSheet = workbook.addWorksheet('Camera Details');
+        detailSheet.columns = [
+            { header: 'S.No', key: 'sno', width: 8 },
+            { header: 'College Name', key: 'collegeName', width: 35 },
+            { header: 'Camera Name', key: 'name', width: 25 },
+            { header: 'Location', key: 'location', width: 20 },
+            { header: 'Static IP', key: 'ipAddress', width: 18 },
+            { header: 'Port', key: 'rtspPort', width: 10 },
+            { header: 'Channel', key: 'channel', width: 12 },
+            { header: 'Username', key: 'username', width: 20 },
+            { header: 'Password', key: 'password', width: 20 },
+            { header: 'Camera Company', key: 'company', width: 20 },
+            { header: 'Status', key: 'status', width: 12 }
+        ];
+        headerStyle(detailSheet.getRow(1));
+
+        sno = 1;
+        collegeMap.forEach((list, collegeName) => {
+            list.forEach(camera => {
+                detailSheet.addRow({
+                    sno: sno++,
+                    collegeName,
+                    name: camera.name,
+                    location: camera.location || '',
+                    ipAddress: camera.ipAddress,
+                    rtspPort: camera.rtspPort,
+                    channel: camera.channel,
+                    username: decodeCredential(camera.username),
+                    password: decodeCredential(camera.password),
+                    company: camera.Device ? camera.Device.deviceName : 'N/A',
+                    status: camera.isActive ? 'Active' : 'Inactive'
+                });
+            });
+        });
+
+        [summarySheet, detailSheet].forEach(sheet => {
+            sheet.views = [{ state: 'frozen', ySplit: 1 }];
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Camera_Analytics_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        console.error('Error generating analytics report:', error);
+        res.status(500).json({ message: 'Error generating analytics report' });
+    }
+});
+
 // Bulk Update Cameras from Excel
 router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, res) => {
     try {
@@ -573,6 +711,9 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
         const quality = req.query.quality || 'high';
         // Start stream and get the WebSocket port
         const wsPort = streamManager.startStream(camera.id, rtspUrl, quality);
+        if (!wsPort) {
+            return res.status(400).json({ message: 'Camera has no RTSP link. Assign a device (company) to this camera.' });
+        }
 
         const host = req.get('host') || 'localhost';
         const protocol = (req.get('X-Forwarded-Proto') || req.protocol) === 'https' ? 'wss' : 'ws';
