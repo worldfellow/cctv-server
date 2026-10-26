@@ -17,9 +17,19 @@ class StreamManager {
         // Map<cameraKey, Set<WebSocket>> clients
         this.clients = new Map();
 
+        // Map<sourceKey, number> consecutive FFmpeg restarts, for backoff
+        this.retryCounts = new Map();
+
         this.wsPort = 9999;
         this.CONNECTION_TIMEOUT = 30000;
         this.MAX_STREAMS = 25; // Safety limit for 2GB RAM
+        // A viewer whose socket has more than this queued is too slow: drop data for it instead of
+        // buffering, so its delay can't keep growing and it doesn't eat server memory
+        this.MAX_CLIENT_BUFFER = 1024 * 1024;
+        // Gap between FFmpeg spawns so opening a page of cameras doesn't spike the CPU all at once
+        this.SPAWN_GAP_MS = 200;
+        this.VIEWER_GRACE_MS = 30000;
+        this.nextSpawnAt = 0;
     }
 
     attach(server) {
@@ -43,6 +53,7 @@ class StreamManager {
             }
 
             console.log(`[StreamManager] Client connecting: ${cameraKey}`);
+            if (socket._socket) socket._socket.setNoDelay(true);
 
             if (!this.clients.has(cameraKey)) {
                 this.clients.set(cameraKey, new Set());
@@ -62,6 +73,17 @@ class StreamManager {
                 console.log(`[StreamManager] Client disconnected: ${cameraKey}. Active clients: ${cameraClients.size}`);
                 if (cameraClients.size === 0) {
                     this.clients.delete(cameraKey);
+                    // HD/Ultra encoding is CPU-heavy: stop it soon after the last viewer leaves
+                    // (e.g. after switching quality) so it doesn't slow down the stream being watched
+                    if (!cameraKey.endsWith('_low')) {
+                        setTimeout(() => {
+                            const current = this.clients.get(cameraKey);
+                            const cam = this.cameras.get(cameraKey);
+                            // Skip if someone requested this stream again in the meantime
+                            const recentlyRequested = cam && Date.now() - cam.lastAccessed < this.VIEWER_GRACE_MS;
+                            if ((!current || current.size === 0) && !recentlyRequested) this.stopStream(cameraKey);
+                        }, this.VIEWER_GRACE_MS);
+                    }
                 }
             });
         });
@@ -74,10 +96,20 @@ class StreamManager {
         const sourceKey = `${rtspUrl}_${quality}`;
         const cameraKey = `${cameraId}_${quality}`;
 
+        if (!rtspUrl) {
+            console.warn(`[StreamManager] No RTSP link for camera ${cameraId}, stream not started`);
+            return null;
+        }
+
         // Update last accessed time to prevent idle cleanup
-        if (this.cameras.has(cameraKey)) {
-            this.cameras.get(cameraKey).lastAccessed = new Date();
-            return this.wsPort;
+        const existing = this.cameras.get(cameraKey);
+        if (existing) {
+            if (existing.sourceKey === sourceKey && this.rtspSources.has(sourceKey)) {
+                existing.lastAccessed = new Date();
+                return this.wsPort;
+            }
+            // Stale entry (source gone or RTSP link changed): start fresh
+            this.stopStream(cameraKey);
         }
 
         console.log(`[StreamManager] INITIALIZING camera ${cameraId} with quality ${quality}`);
@@ -124,61 +156,56 @@ class StreamManager {
                     height: quality === 'ultra' ? 1080 : (quality === 'low' ? 480 : 720),
                     cameras: new Set([cameraKey]),
                     inputStreamStarted: false,
+                    // About 3-5 seconds of video at this quality's bitrate
+                    maxClientBuffer: quality === 'ultra' ? 6 * 1024 * 1024 : (quality === 'low' ? this.MAX_CLIENT_BUFFER : 3 * 1024 * 1024),
                 };
                 this.rtspSources.set(sourceKey, source);
 
                 const ffmpegArgs = [
+                    '-loglevel', 'error',
                     '-rtsp_transport', 'tcp',
+                    '-timeout', '10000000', // Give up on a camera that stops answering (10s, in microseconds)
+                    // Low-latency input: don't buffer, probe the stream for 1s instead of the default 5s
+                    '-fflags', 'nobuffer',
+                    '-flags', 'low_delay',
+                    '-probesize', '1000000',
+                    '-analyzeduration', '1000000',
                     '-i', rtspUrl,
                     '-f', 'mpegts',
                     '-codec:v', 'mpeg1video',
-                    '-preset', 'ultrafast', // Optimized for your 2-CPU VM
-                    '-tune', 'zerolatency',
                     '-bf', '0',
-                    '-threads', '2', // Lock to VM core count
+                    '-threads', quality === 'low' ? '1' : '2', // Small dashboard streams don't need both cores
+                    '-flush_packets', '1',
                     '-an'
                 ];
 
                 if (quality === 'low') {
                     ffmpegArgs.push('-s', '320x240', '-r', '20', '-b:v', '600k', '-maxrate', '600k', '-bufsize', '1200k', '-q:v', '6');
-                } else if (quality === 'ultra') {
-                    ffmpegArgs.push('-s', '1920x1080', '-r', '25', '-b:v', '6000k', '-maxrate', '8000k', '-bufsize', '12000k');
                 } else {
-                    ffmpegArgs.push('-s', '1280x720', '-r', '20', '-b:v', '2000k', '-maxrate', '2500k', '-bufsize', '4000k');
+                    // MPEG-1 needs about twice the bitrate of H.264 for a clean picture.
+                    // Scale by height keeping the camera's aspect ratio, never upscaling a smaller source.
+                    // 25fps (20 isn't a valid MPEG-1 rate), one keyframe per second for quick recovery.
+                    const [height, bitrate, maxrate, bufsize] = quality === 'ultra'
+                        ? [1080, '9000k', '11000k', '18000k']
+                        : [720, '4500k', '5500k', '9000k'];
+                    ffmpegArgs.push(
+                        '-vf', `scale=-2:min(${height}\\,ih)`,
+                        '-r', '25', '-g', '25',
+                        '-b:v', bitrate, '-maxrate', maxrate, '-bufsize', bufsize
+                    );
                 }
 
                 ffmpegArgs.push('-');
 
-                const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { detached: false });
-                source.ffmpeg = ffmpeg;
-
-                ffmpeg.stdout.on('data', (data) => {
-                    source.inputStreamStarted = true;
-                    // Broadcast directly to all camera clients sharing this source
-                    for (const camKey of source.cameras) {
-                        const cameraClients = this.clients.get(camKey);
-                        if (cameraClients && cameraClients.size > 0) {
-                            cameraClients.forEach(client => {
-                                if (client.readyState === WebSocket.OPEN) {
-                                    client.send(data, { binary: true });
-                                }
-                            });
-                        }
-                    }
-                });
-
-                ffmpeg.stderr.on('data', (data) => {
-                    if (!source.inputStreamStarted) {
-                        const str = data.toString();
-                        const sizeMatch = str.match(/(\d{2,5})x(\d{2,5})/);
-                        if (sizeMatch) {
-                            source.width = parseInt(sizeMatch[1], 10);
-                            source.height = parseInt(sizeMatch[2], 10);
-                        }
-                    }
-                });
-
-                ffmpeg.on('exit', () => this.handleFFmpegExit(sourceKey));
+                // Spawn in the background, spaced out, so the HTTP request returns immediately
+                const now = Date.now();
+                const delay = Math.max(0, this.nextSpawnAt - now);
+                this.nextSpawnAt = now + delay + this.SPAWN_GAP_MS;
+                setTimeout(() => {
+                    // The stream may have been stopped while waiting its turn
+                    if (this.rtspSources.get(sourceKey) !== source) return;
+                    this._spawnFFmpeg(sourceKey, source, ffmpegArgs);
+                }, delay);
             }
 
             cameraData.checkTimeout = setTimeout(() => {
@@ -193,11 +220,45 @@ class StreamManager {
         }
     }
 
-    handleFFmpegExit(sourceKey) {
-        const source = this.rtspSources.get(sourceKey);
-        if (!source) return;
+    _spawnFFmpeg(sourceKey, source, ffmpegArgs) {
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { detached: false });
+        source.ffmpeg = ffmpeg;
 
-        console.log(`[StreamManager] FFmpeg exited for ${sourceKey}. Attempting recovery if clients active...`);
+        ffmpeg.stdout.on('data', (data) => {
+            if (!source.inputStreamStarted) {
+                source.inputStreamStarted = true;
+                this.retryCounts.delete(sourceKey);
+            }
+            // Broadcast directly to all camera clients sharing this source
+            for (const camKey of source.cameras) {
+                const cameraClients = this.clients.get(camKey);
+                if (cameraClients && cameraClients.size > 0) {
+                    cameraClients.forEach(client => {
+                        // Skip slow viewers until their socket drains, so one slow viewer doesn't build up lag
+                        if (client.readyState === WebSocket.OPEN && client.bufferedAmount < source.maxClientBuffer) {
+                            client.send(data, { binary: true });
+                        }
+                    });
+                }
+            }
+        });
+
+        ffmpeg.stderr.on('data', (data) => {
+            if (!source.inputStreamStarted) {
+                console.warn(`[StreamManager] FFmpeg ${sourceKey.split('@')[1] || sourceKey}: ${data.toString().trim()}`);
+            }
+        });
+
+        ffmpeg.on('error', (err) => console.error(`[StreamManager] FFmpeg spawn error:`, err.message));
+        ffmpeg.on('exit', () => this.handleFFmpegExit(sourceKey, source));
+    }
+
+    handleFFmpegExit(sourceKey, exitedSource) {
+        const source = this.rtspSources.get(sourceKey);
+        // Ignore exits of a process that was already replaced or killed
+        if (!source || source !== exitedSource) return;
+
+        console.log(`[StreamManager] FFmpeg exited for ${sourceKey.split('@')[1] || sourceKey}. Attempting recovery if clients active...`);
 
         // Check if any clients are still watching cameras on this source
         const hasClients = Array.from(source.cameras).some(camKey => {
@@ -205,23 +266,36 @@ class StreamManager {
             return clients && clients.size > 0;
         });
 
-        this.rtspSources.delete(sourceKey);
-
-        if (hasClients) {
-            setTimeout(() => {
-                for (const camKey of source.cameras) {
-                    const cam = this.cameras.get(camKey);
-                    if (cam) {
-                        this.cameras.delete(camKey);
-                        const cameraId = camKey.split('_')[0];
-                        const quality = camKey.split('_')[1];
-                        this.startStream(cameraId, cam.rtspUrl, quality);
-                    }
-                }
-            }, 2000);
-        } else {
+        if (!hasClients) {
+            this.retryCounts.delete(sourceKey);
             this._killSource(sourceKey);
+            return;
         }
+
+        // Keep viewers connected; drop the dead source and retry with backoff (2s, 4s, 8s ... max 30s)
+        const retries = this.retryCounts.get(sourceKey) || 0;
+        this.retryCounts.set(sourceKey, retries + 1);
+        const delay = Math.min(30000, 2000 * Math.pow(2, retries));
+
+        this.rtspSources.delete(sourceKey);
+        const toRestart = [];
+        for (const camKey of source.cameras) {
+            const cam = this.cameras.get(camKey);
+            if (cam) {
+                if (cam.checkTimeout) clearTimeout(cam.checkTimeout);
+                this.cameras.delete(camKey);
+                toRestart.push({ camKey, rtspUrl: cam.rtspUrl });
+            }
+        }
+
+        setTimeout(() => {
+            for (const { camKey, rtspUrl } of toRestart) {
+                const clients = this.clients.get(camKey);
+                if (!clients || clients.size === 0) continue;
+                const sep = camKey.lastIndexOf('_');
+                this.startStream(camKey.slice(0, sep), rtspUrl, camKey.slice(sep + 1));
+            }
+        }, delay);
     }
 
     stopStream(cameraKey) {

@@ -6,6 +6,8 @@ const Role = require('./Role');
 const Screenshot = require('./Screenshot');
 const SystemConfig = require('./SystemConfig');
 const Device = require('./Device');
+const CameraHealth = require('./CameraHealth');
+const CameraStatusHistory = require('./CameraStatusHistory');
 
 const initDb = async () => {
     try {
@@ -86,5 +88,7 @@ module.exports = {
     Screenshot,
     SystemConfig,
     Device,
+    CameraHealth,
+    CameraStatusHistory,
     initDb
 };
