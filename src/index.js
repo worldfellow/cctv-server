@@ -13,12 +13,15 @@ const dashboardRoutes = require('./routes/dashboard');
 const screenshotRoutes = require('./routes/screenshots');
 const configRoutes = require('./routes/config');
 const deviceRoutes = require('./routes/devices');
+const connectivityRoutes = require('./routes/connectivity');
 const streamManager = require('./services/streamManager');
+const healthMonitor = require('./services/healthMonitor.service');
 
 dotenv.config();
 
 // Initialize Database
-initDb();
+// Background camera connectivity checks start once the database is ready
+initDb().then(() => healthMonitor.start());
 
 const app = express();
 app.set('trust proxy', true);
@@ -39,6 +42,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/connectivity', connectivityRoutes);
 
 // Serve static files (same fallback folder the logo upload in routes/config.js writes to)
 const uploadsPath = process.env.FILE_LOCATION || path.join(__dirname, '../../uploads');

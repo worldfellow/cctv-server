@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Camera, College } = require('../models');
+const { Camera, College, Device } = require('../models');
 const { decrypt } = require('../utils/crypto');
 const authMiddleware = require('../middleware/auth');
 const streamManager = require('../services/streamManager');
@@ -49,7 +49,10 @@ router.get('/', authMiddleware, async (req, res) => {
             limit,
             offset,
             order: [['createdAt', 'ASC']],
-            include: [{ model: College, attributes: ['name'] }]
+            include: [
+                { model: College, attributes: ['name'] },
+                { model: Device, attributes: ['rtspLink'] }
+            ]
         });
 
         const formattedData = [];
@@ -60,16 +63,14 @@ router.get('/', authMiddleware, async (req, res) => {
             // Construct RTSP URL for streamManager
             let rtspUrl = ``;
 
-            if (camera.deviceId) {
-                const device = await require('../models').Device.findByPk(camera.deviceId);
-                if (device && device.rtspLink) {
-                    rtspUrl = device.rtspLink
-                        .replace(/\$userTemplate/g, rawUsername)
-                        .replace(/\$passwordTemplate/g, rawPassword)
-                        .replace(/\$ipTemplate/g, camera.ipAddress)
-                        .replace(/\$portTemplate/g, camera.rtspPort.toString())
-                        .replace(/\$channelTemplate/g, camera.channel);
-                }
+            const device = camera.Device;
+            if (device && device.rtspLink) {
+                rtspUrl = device.rtspLink
+                    .replace(/\$userTemplate/g, rawUsername)
+                    .replace(/\$passwordTemplate/g, rawPassword)
+                    .replace(/\$ipTemplate/g, camera.ipAddress)
+                    .replace(/\$portTemplate/g, camera.rtspPort.toString())
+                    .replace(/\$channelTemplate/g, camera.channel);
             }
 
             let wsPort;
@@ -91,11 +92,6 @@ router.get('/', authMiddleware, async (req, res) => {
                 wsUrl: wsPort ? `${protocol}://${host}/api/stream/${camera.id}_low` : null,
                 collegeName: camera.College ? camera.College.name : null
             });
-
-            // stagger delay to ensure clean process start
-            if (rows.length > 1) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
         }
 
         res.json({
