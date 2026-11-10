@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const exceljs = require('exceljs');
+const { collegeLabel } = require('../utils/collegeLabel');
 const PDFDocument = require('pdfkit');
 const { College } = require('../models');
 const authMiddleware = require('../middleware/auth');
@@ -198,7 +199,7 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
 
         const collegeSheet = workbook.addWorksheet('College Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
         collegeSheet.columns = [
-            { header: 'College Name', key: 'name', width: 36 },
+            { header: 'College Name, Location', key: 'name', width: 50 },
             { header: 'Connection Status', key: 'status', width: 20 },
             { header: 'Total Cameras', key: 'totalCameras', width: 14 },
             { header: 'Online', key: 'online', width: 10 },
@@ -220,6 +221,7 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
         colleges.forEach(c => {
             const row = collegeSheet.addRow({
                 ...c,
+                name: collegeLabel(c),
                 status: COLLEGE_STATUS_LABELS[c.status],
                 downFor: c.downSince ? formatDuration(c.downSince) : '',
                 lastChecked: formatDateTime(c.latestCheckAt)
@@ -231,7 +233,7 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
 
         const cameraSheet = workbook.addWorksheet('Camera Details', { views: [{ state: 'frozen', ySplit: 1 }] });
         cameraSheet.columns = [
-            { header: 'College Name', key: 'collegeName', width: 32 },
+            { header: 'College Name, Location', key: 'collegeName', width: 46 },
             { header: 'Camera Name', key: 'name', width: 26 },
             { header: 'Location', key: 'location', width: 22 },
             { header: 'IP Address', key: 'ipAddress', width: 16 },
@@ -248,9 +250,11 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
             { header: 'Details', key: 'details', width: 42 }
         ];
         headerStyle(cameraSheet);
+        const collegeLabels = new Map(colleges.map(c => [c.id, collegeLabel(c)]));
         cameras.forEach(c => {
             const row = cameraSheet.addRow({
                 ...c,
+                collegeName: collegeLabels.get(c.collegeId) || c.collegeName,
                 status: CAMERA_STATUS_LABELS[c.status],
                 statusFor: c.statusSince && c.status !== 'disabled' ? formatDuration(c.statusSince) : '',
                 lastChecked: formatDateTime(c.lastCheckedAt),

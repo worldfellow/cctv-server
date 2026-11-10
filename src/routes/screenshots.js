@@ -102,9 +102,20 @@ router.get('/', authMiddleware, async (req, res) => {
             offset: offset
         });
 
+        // Screenshots only store the college name; attach the college's location (address) for display
+        const { College } = require('../models');
+        const names = [...new Set(rows.map(r => r.collegeName))];
+        const colleges = names.length ? await College.findAll({ where: { name: { [Op.in]: names } }, attributes: ['name', 'address'] }) : [];
+        const addressByName = new Map();
+        colleges.forEach(c => {
+            // Same name used by more than one college: location is ambiguous, so leave it out
+            addressByName.set(c.name, addressByName.has(c.name) ? null : (c.address || null));
+        });
+        const screenshots = rows.map(r => ({ ...r.toJSON(), collegeAddress: addressByName.get(r.collegeName) || null }));
+
         res.json({
             totalItems: count,
-            screenshots: rows,
+            screenshots,
             totalPages: Math.ceil(count / parseInt(limit)),
             currentPage: parseInt(page)
         });
