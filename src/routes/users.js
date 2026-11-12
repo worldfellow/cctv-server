@@ -6,6 +6,7 @@ const keycloakService = require('../services/keycloak.service');
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const exceljs = require('exceljs');
+const { collegeLabel, buildCollegeLookup } = require('../utils/collegeLabel');
 const multer = require('multer');
 
 // Configure multer for memory storage
@@ -140,7 +141,7 @@ router.get('/me', authMiddleware, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id, {
             attributes: { exclude: ['password'] },
-            include: [{ model: College, attributes: ['name'] }]
+            include: [{ model: College, attributes: ['name', 'address'] }]
         });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -182,7 +183,7 @@ router.get('/', authMiddleware, async (req, res) => {
             where: whereClause,
             limit,
             offset,
-            include: [{ model: College, attributes: ['name'] }],
+            include: [{ model: College, attributes: ['name', 'address'] }],
             order: [['createdAt', 'DESC']],
             attributes: { exclude: ['password'] }
         });
@@ -262,7 +263,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
             { header: 'Email', key: 'email', width: 30 },
             { header: 'Mobile No', key: 'mobileNo', width: 20 },
             { header: 'Role', key: 'role', width: 15 },
-            { header: 'College Name', key: 'collegeName', width: 30 }
+            { header: 'College Name, Location', key: 'collegeName', width: 45 }
         ];
 
         // Add a sample row
@@ -279,13 +280,13 @@ router.get('/template/download', authMiddleware, async (req, res) => {
         const refSheet = workbook.addWorksheet('Reference');
         refSheet.columns = [
             { header: 'Valid Roles', key: 'roles', width: 20 },
-            { header: 'Active Colleges', key: 'colleges', width: 40 }
+            { header: 'Active Colleges', key: 'colleges', width: 55 }
         ];
 
         const roles = await Role.findAll({ attributes: ['roleName'] });
         const roleNames = roles.map(r => r.roleName);
-        const colleges = await College.findAll({ where: { isActive: true }, attributes: ['name'] });
-        const collegeNames = ['All Colleges', ...colleges.map(c => c.name)];
+        const colleges = await College.findAll({ where: { isActive: true }, attributes: ['name', 'address'], order: [['name', 'ASC']] });
+        const collegeNames = ['All Colleges', ...colleges.map(c => collegeLabel(c))];
 
         const maxRows = Math.max(roleNames.length, collegeNames.length);
         for (let i = 0; i < maxRows; i++) {
@@ -357,8 +358,8 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
         const mobileSet = new Set();
 
         // Fetch all colleges for name-to-id mapping
-        const allColleges = await College.findAll({ attributes: ['id', 'name'] });
-        const collegeMap = new Map(allColleges.map(c => [c.name.toLowerCase().trim(), c.id]));
+        const allColleges = await College.findAll({ attributes: ['id', 'name', 'address'] });
+        const collegeMap = buildCollegeLookup(allColleges);
 
         const rows = [];
         sheet.eachRow((row, rowNumber) => {
@@ -626,7 +627,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
         const userResponse = await User.findByPk(newUser.id, {
             attributes: { exclude: ['password'] },
-            include: [{ model: College, attributes: ['name'] }]
+            include: [{ model: College, attributes: ['name', 'address'] }]
         });
 
         res.status(201).json(userResponse);
@@ -705,7 +706,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
         const updatedUser = await User.findByPk(id, {
             attributes: { exclude: ['password'] },
-            include: [{ model: College, attributes: ['name'] }]
+            include: [{ model: College, attributes: ['name', 'address'] }]
         });
 
         res.json(updatedUser);
@@ -796,7 +797,7 @@ router.patch('/:id/toggle-status', authMiddleware, async (req, res) => {
 
         const updatedUser = await User.findByPk(id, {
             attributes: { exclude: ['password'] },
-            include: [{ model: College, attributes: ['name'] }]
+            include: [{ model: College, attributes: ['name', 'address'] }]
         });
 
         res.json(updatedUser);

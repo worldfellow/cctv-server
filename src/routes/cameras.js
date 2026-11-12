@@ -7,6 +7,7 @@ const { Op } = require('sequelize');
 const exceljs = require('exceljs');
 const multer = require('multer');
 const streamManager = require('../services/streamManager');
+const { collegeLabel, buildCollegeLookup } = require('../utils/collegeLabel');
 
 // Configure multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
@@ -53,7 +54,7 @@ router.post('/', authMiddleware, async (req, res) => {
 // Generate Excel Template for Bulk Upload
 router.get('/template/download', authMiddleware, async (req, res) => {
     try {
-        const colleges = await College.findAll({ attributes: ['name'] });
+        const colleges = await College.findAll({ attributes: ['name', 'address'], order: [['name', 'ASC']] });
         const workbook = new exceljs.Workbook();
         const sheet = workbook.addWorksheet('Cameras');
 
@@ -62,7 +63,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
         configSheet.state = 'hidden';
 
         colleges.forEach((college, index) => {
-            configSheet.getCell(`A${index + 1}`).value = college.name;
+            configSheet.getCell(`A${index + 1}`).value = collegeLabel(college);
         });
 
         const statusList = ['Active', 'Inactive'];
@@ -78,7 +79,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
 
         // Add headers to main sheet
         sheet.columns = [
-            { header: 'College Name', key: 'collegeName', width: 30 },
+            { header: 'College Name, Location', key: 'collegeName', width: 45 },
             { header: 'Camera Name', key: 'name', width: 25 },
             { header: 'Location', key: 'location', width: 25 },
             { header: 'IP Address', key: 'ipAddress', width: 20 },
@@ -119,7 +120,7 @@ router.get('/template/download', authMiddleware, async (req, res) => {
         // Add a sample row (optional)
         if (colleges.length > 0) {
             sheet.addRow({
-                collegeName: colleges[0].name,
+                collegeName: collegeLabel(colleges[0]),
                 name: 'Main Entrance',
                 location: 'Gate A',
                 ipAddress: '192.168.1.100',
@@ -158,10 +159,7 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
         }
 
         const colleges = await College.findAll();
-        const collegeMap = {};
-        colleges.forEach(c => {
-            collegeMap[c.name.trim().toLowerCase()] = c.id;
-        });
+        const collegeMap = buildCollegeLookup(colleges);
 
         const devices = await Device.findAll();
         const deviceMap = {};
@@ -189,7 +187,7 @@ router.post('/bulk-upload', authMiddleware, upload.single('file'), async (req, r
             // Skip entirely empty rows
             if (!collegeName && !ipAddress && !username && !cameraName) return;
 
-            const collegeId = collegeName ? collegeMap[collegeName.toLowerCase()] : null;
+            const collegeId = collegeName ? collegeMap.get(collegeName.toLowerCase()) : null;
 
             if (!collegeId) {
                 errors.push(`Row ${rowNumber}: College '${collegeName}' not found`);
@@ -249,7 +247,7 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
         const cameras = await Camera.findAll({
             where: whereClause,
             include: [
-                { model: College, attributes: ['name'] },
+                { model: College, attributes: ['name', 'address'] },
                 { model: Device, attributes: ['deviceName'] }
             ],
             order: [['collegeId', 'ASC'], ['name', 'ASC']]
@@ -259,12 +257,12 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
         const sheet = workbook.addWorksheet('Cameras');
 
         // Config sheet for dropdown lists
-        const collegesForList = await College.findAll({ attributes: ['name'] });
+        const collegesForList = await College.findAll({ attributes: ['name', 'address'], order: [['name', 'ASC']] });
         const configSheet = workbook.addWorksheet('Config');
         configSheet.state = 'hidden';
 
         collegesForList.forEach((college, index) => {
-            configSheet.getCell(`A${index + 1}`).value = college.name;
+            configSheet.getCell(`A${index + 1}`).value = collegeLabel(college);
         });
 
         const statusList = ['Active', 'Inactive'];
@@ -280,7 +278,7 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
         // Add headers
         sheet.columns = [
             { header: 'Camera ID', key: 'id', width: 15 },
-            { header: 'College Name', key: 'collegeName', width: 30 },
+            { header: 'College Name, Location', key: 'collegeName', width: 45 },
             { header: 'Camera Name', key: 'name', width: 25 },
             { header: 'Location', key: 'location', width: 25 },
             { header: 'IP Address', key: 'ipAddress', width: 20 },
@@ -304,7 +302,7 @@ router.get('/bulk-export', authMiddleware, async (req, res) => {
         cameras.forEach(camera => {
             sheet.addRow({
                 id: camera.id,
-                collegeName: camera.College ? camera.College.name : 'N/A',
+                collegeName: camera.College ? collegeLabel(camera.College) : 'N/A',
                 name: camera.name,
                 location: camera.location || '',
                 ipAddress: camera.ipAddress,
@@ -378,7 +376,7 @@ router.get('/analytics-report', authMiddleware, async (req, res) => {
         const cameras = await Camera.findAll({
             where: whereClause,
             include: [
-                { model: College, attributes: ['name'] },
+                { model: College, attributes: ['name', 'address'] },
                 { model: Device, attributes: ['deviceName'] }
             ],
             order: [[College, 'name', 'ASC'], ['name', 'ASC']]
@@ -390,7 +388,7 @@ router.get('/analytics-report', authMiddleware, async (req, res) => {
         // Group cameras by college
         const collegeMap = new Map();
         cameras.forEach(camera => {
-            const collegeName = camera.College ? camera.College.name : 'N/A';
+            const collegeName = camera.College ? collegeLabel(camera.College) : 'N/A';
             if (!collegeMap.has(collegeName)) {
                 collegeMap.set(collegeName, []);
             }
@@ -408,7 +406,7 @@ router.get('/analytics-report', authMiddleware, async (req, res) => {
         const summarySheet = workbook.addWorksheet('College Summary');
         summarySheet.columns = [
             { header: 'S.No', key: 'sno', width: 8 },
-            { header: 'College Name', key: 'collegeName', width: 35 },
+            { header: 'College Name, Location', key: 'collegeName', width: 50 },
             { header: 'No. of Cameras', key: 'total', width: 16 },
             { header: 'Active', key: 'active', width: 10 },
             { header: 'Inactive', key: 'inactive', width: 10 },
@@ -445,7 +443,7 @@ router.get('/analytics-report', authMiddleware, async (req, res) => {
         const detailSheet = workbook.addWorksheet('Camera Details');
         detailSheet.columns = [
             { header: 'S.No', key: 'sno', width: 8 },
-            { header: 'College Name', key: 'collegeName', width: 35 },
+            { header: 'College Name, Location', key: 'collegeName', width: 50 },
             { header: 'Camera Name', key: 'name', width: 25 },
             { header: 'Location', key: 'location', width: 20 },
             { header: 'Static IP', key: 'ipAddress', width: 18 },
@@ -508,10 +506,7 @@ router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, r
         }
 
         const colleges = await College.findAll();
-        const collegeMap = {};
-        colleges.forEach(c => {
-            collegeMap[c.name.trim().toLowerCase()] = c.id;
-        });
+        const collegeMap = buildCollegeLookup(colleges);
 
         const devices = await Device.findAll();
         const deviceMap = {};
@@ -541,7 +536,7 @@ router.post('/bulk-update', authMiddleware, upload.single('file'), async (req, r
             // Skip entirely empty rows
             if (!id && !collegeName && !ipAddress && !cameraName) return;
 
-            const collegeId = collegeName ? collegeMap[collegeName.toLowerCase()] : null;
+            const collegeId = collegeName ? collegeMap.get(collegeName.toLowerCase()) : null;
 
             if (!collegeId) {
                 errors.push(`Row ${rowNumber}: College '${collegeName}' not found`);
@@ -641,7 +636,7 @@ router.get('/', authMiddleware, async (req, res) => {
             offset,
             order: [['createdAt', 'DESC']],
             include: [
-                { model: College, attributes: ['name'] },
+                { model: College, attributes: ['name', 'address'] },
                 { model: require('../models').Device, attributes: ['deviceName', 'rtspLink'] }
             ]
         });
@@ -662,6 +657,7 @@ router.get('/', authMiddleware, async (req, res) => {
                 thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop', // Placeholder thumbnail
                 collegeId: camera.collegeId,
                 collegeName: camera.College ? camera.College.name : null,
+                collegeAddress: camera.College ? camera.College.address : null,
                 deviceId: camera.deviceId,
                 deviceName: camera.Device ? camera.Device.deviceName : null,
                 username: rawUsername,
@@ -734,7 +730,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     try {
         const camera = await Camera.findByPk(req.params.id, {
             include: [
-                { model: College, attributes: ['name'] },
+                { model: College, attributes: ['name', 'address'] },
                 { model: require('../models').Device, attributes: ['deviceName', 'rtspLink'] }
             ]
         });
@@ -758,6 +754,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
             thumbnail: 'https://images.unsplash.com/photo-1557597774-9d2739f85a94?q=80&w=800&auto=format&fit=crop',
             collegeId: camera.collegeId,
             collegeName: camera.College ? camera.College.name : null,
+            collegeAddress: camera.College ? camera.College.address : null,
             deviceId: camera.deviceId,
             deviceName: camera.Device ? camera.Device.deviceName : null,
             username: rawUsername,

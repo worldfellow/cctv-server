@@ -180,7 +180,7 @@ router.get('/active', authMiddleware, async (req, res) => {
         const colleges = await College.findAll({
             where: whereClause,
             order: [['name', 'ASC']],
-            attributes: ['id', 'name']
+            attributes: ['id', 'name', 'address']
         });
         res.json(colleges);
     } catch (error) {
