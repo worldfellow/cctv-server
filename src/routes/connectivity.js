@@ -204,18 +204,13 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
             { header: 'Total Cameras', key: 'totalCameras', width: 14 },
             { header: 'Online', key: 'online', width: 10 },
             { header: 'Not Working', key: 'notWorking', width: 13 },
-            { header: 'Stream Error', key: 'streamError', width: 13 },
-            { header: 'No RTSP Response', key: 'noResponse', width: 17 },
             { header: 'Offline', key: 'offline', width: 10 },
             { header: 'Not Checked Yet', key: 'pending', width: 16 },
             { header: 'Disabled', key: 'disabled', width: 10 },
-            { header: 'Health %', key: 'health', width: 10 },
-            { header: `Uptime % (${days}d)`, key: 'uptime', width: 15 },
-            { header: `Outages (${days}d)`, key: 'outages', width: 14 },
             { header: 'Not Working For', key: 'downFor', width: 16 },
             { header: 'Last Checked', key: 'lastChecked', width: 20 },
             { header: 'Address', key: 'address', width: 40 },
-            { header: 'Contact Email', key: 'contactEmail', width: 30 }
+            // { header: 'Contact Email', key: 'contactEmail', width: 30 }
         ];
         headerStyle(collegeSheet);
         colleges.forEach(c => {
