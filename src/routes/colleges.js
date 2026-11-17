@@ -166,6 +166,175 @@ router.post('/bulk-upload', authMiddleware, checkActionPermission('college_creat
     }
 });
 
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Colleges the current user is allowed to see/edit
+const scopedCollegeWhere = (user) => {
+    if (user.role !== 'SUPER_ADMIN' && !(user.allowedColleges || []).includes('ALL')) {
+        return { id: { [Op.in]: user.allowedColleges || [] } };
+    }
+    return {};
+};
+
+// Cell value -> trimmed string (handles hyperlink/rich-text cells from Excel)
+const cellText = (cell) => {
+    const v = cell.value;
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object') {
+        if (v.text !== undefined) return String(v.text).trim();
+        if (v.richText) return v.richText.map(t => t.text).join('').trim();
+        if (v.result !== undefined) return String(v.result).trim();
+    }
+    return String(v).trim();
+};
+
+// Export existing colleges to Excel for bulk editing
+router.get('/bulk-export', authMiddleware, checkActionPermission('college_edit'), async (req, res) => {
+    try {
+        const colleges = await College.findAll({
+            where: scopedCollegeWhere(req.user),
+            order: [['name', 'ASC']]
+        });
+
+        const workbook = new exceljs.Workbook();
+        const sheet = workbook.addWorksheet('Colleges');
+        sheet.columns = [
+            { header: 'College ID', key: 'id', width: 40 },
+            { header: 'College Name', key: 'name', width: 30 },
+            { header: 'Address', key: 'address', width: 50 },
+            { header: 'Contact Email', key: 'contactEmail', width: 30 },
+            { header: 'Status', key: 'status', width: 15 }
+        ];
+        sheet.getRow(1).font = { bold: true };
+        sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+
+        colleges.forEach(c => sheet.addRow({
+            id: c.id,
+            name: c.name,
+            address: c.address || '',
+            contactEmail: c.contactEmail || '',
+            status: c.isActive ? 'Active' : 'Inactive'
+        }));
+
+        // Lock the ID column visually and add a Status dropdown
+        sheet.getColumn(1).font = { color: { argb: 'FF808080' } };
+        for (let i = 2; i <= colleges.length + 1; i++) {
+            sheet.getCell(`E${i}`).dataValidation = {
+                type: 'list',
+                allowBlank: false,
+                formulae: ['"Active,Inactive"']
+            };
+        }
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=College_Bulk_Edit_${new Date().toISOString().split('T')[0]}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        console.error('Error during college bulk export:', error);
+        res.status(500).json({ message: 'Error generating export' });
+    }
+});
+
+// Bulk update colleges from an edited Excel export (matched by College ID)
+router.post('/bulk-update', authMiddleware, checkActionPermission('college_edit'), upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        const workbook = new exceljs.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const sheet = workbook.getWorksheet('Colleges') || workbook.worksheets[0];
+        if (!sheet) {
+            return res.status(400).json({ message: 'Invalid Excel file structure' });
+        }
+
+        const existing = await College.findAll({ where: scopedCollegeWhere(req.user) });
+        const existingMap = new Map(existing.map(c => [c.id, c]));
+
+        const updates = [];
+        const errors = [];
+        const seen = new Set();
+
+        sheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return;
+
+            const id = cellText(row.getCell(1));
+            const name = cellText(row.getCell(2));
+            const address = cellText(row.getCell(3));
+            const contactEmail = cellText(row.getCell(4));
+            const status = cellText(row.getCell(5));
+
+            if (!id && !name && !address && !contactEmail && !status) return;
+
+            if (!id) {
+                errors.push(`Row ${rowNumber}: Missing College ID (use Bulk Import to add new colleges)`);
+                return;
+            }
+            if (seen.has(id)) {
+                errors.push(`Row ${rowNumber}: Duplicate College ID '${id}'`);
+                return;
+            }
+            seen.add(id);
+
+            if (!existingMap.has(id)) {
+                errors.push(`Row ${rowNumber}: College ID '${id}' not found or not permitted`);
+                return;
+            }
+            if (!name) {
+                errors.push(`Row ${rowNumber}: College Name is required`);
+                return;
+            }
+            if (contactEmail && !emailRegex.test(contactEmail)) {
+                errors.push(`Row ${rowNumber}: Invalid email format for '${contactEmail}'`);
+                return;
+            }
+            const statusLower = status.toLowerCase();
+            if (status && statusLower !== 'active' && statusLower !== 'inactive') {
+                errors.push(`Row ${rowNumber}: Status must be 'Active' or 'Inactive'`);
+                return;
+            }
+
+            const data = {
+                name,
+                address: address || null,
+                contactEmail: contactEmail || null
+            };
+            if (status) data.isActive = statusLower === 'active';
+            updates.push({ id, data });
+        });
+
+        if (errors.length > 0) {
+            return res.status(400).json({ message: 'Validation failed', errors });
+        }
+        if (updates.length === 0) {
+            return res.status(400).json({ message: 'No valid data found in file' });
+        }
+
+        // Apply atomically; skip rows that did not change
+        let changed = 0;
+        await College.sequelize.transaction(async (transaction) => {
+            for (const { id, data } of updates) {
+                const college = existingMap.get(id);
+                college.set(data);
+                if (college.changed()) {
+                    await college.save({ transaction });
+                    changed++;
+                }
+            }
+        });
+
+        res.json({
+            message: `Processed ${updates.length} rows: ${changed} updated, ${updates.length - changed} unchanged.`,
+            details: { updated: changed, unchanged: updates.length - changed }
+        });
+    } catch (error) {
+        console.error('Error during college bulk update:', error);
+        res.status(500).json({ message: 'Error processing Excel file' });
+    }
+});
+
 // Get all active colleges (unpaginated for dropdowns)
 router.get('/active', authMiddleware, async (req, res) => {
     try {
