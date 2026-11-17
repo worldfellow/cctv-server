@@ -27,7 +27,10 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// credentials: true lets the browser send/accept the HttpOnly refresh cookie on cross-origin dev setups.
+// Set CORS_ORIGINS (comma-separated) to restrict allowed origins; unset keeps the previous open behaviour.
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+app.use(cors({ origin: corsOrigins.length ? corsOrigins : true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(morgan('dev'));

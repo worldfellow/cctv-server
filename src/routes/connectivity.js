@@ -23,7 +23,7 @@ const CAMERA_STATUS_LABELS = {
     no_response: 'No RTSP Response',
     offline: 'Offline',
     pending: 'Not Checked Yet',
-    disabled: 'Disabled'
+    disabled: 'Inactive'
 };
 
 const STATUS_COLORS = {
@@ -206,7 +206,7 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
             { header: 'Not Working', key: 'notWorking', width: 13 },
             { header: 'Offline', key: 'offline', width: 10 },
             { header: 'Not Checked Yet', key: 'pending', width: 16 },
-            { header: 'Disabled', key: 'disabled', width: 10 },
+            { header: 'Inactive', key: 'disabled', width: 10 },
             { header: 'Not Working For', key: 'downFor', width: 16 },
             { header: 'Last Checked', key: 'lastChecked', width: 20 },
             { header: 'Address', key: 'address', width: 40 },
@@ -279,7 +279,7 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
             ['Cameras Online', summary.online],
             ['Cameras Not Working', summary.notWorking],
             ['Cameras Not Checked Yet', summary.pendingCameras],
-            ['Cameras Disabled', summary.disabled],
+            ['Cameras Inactive', summary.disabled],
             [`Average Uptime % (${days}d)`, summary.uptime ?? '-']
         ].forEach(([k, v]) => infoSheet.addRow({ k, v }).commit());
         infoSheet.commit();
