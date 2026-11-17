@@ -257,7 +257,7 @@ const getCameraDetails = async (user, collegeIds, days) => {
             unconfirmedFailure: !!(h && h.status === 'online' && h.lastResult !== 'online'),
             rtspCode: h ? h.rtspCode : null,
             latencyMs: h ? h.latencyMs : null,
-            error: h ? h.error : (enabled ? 'Not checked yet' : (camera.isActive ? 'College is inactive' : 'Camera is disabled')),
+            error: h ? h.error : (enabled ? 'Not checked yet' : (camera.isActive ? 'College is inactive' : 'Camera is inactive')),
             lastCheckedAt: h ? h.lastCheckedAt : null,
             lastOnlineAt: h ? h.lastOnlineAt : null,
             statusSince: h ? h.statusSince : null,
