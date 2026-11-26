@@ -55,4 +55,26 @@ function decrypt(text) {
     }
 }
 
-module.exports = { encrypt, decrypt };
+// Compact AES-256-GCM seal for cookie values (base64url keeps it ~1.4x the size, well under the 4KB cookie limit).
+// Tamper-proof: a modified or old plaintext cookie fails to open and returns null.
+function seal(text) {
+    if (!text) return text;
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', KEY_BUFFER, iv);
+    const body = Buffer.concat([cipher.update(String(text), 'utf8'), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url');
+}
+
+function unseal(value) {
+    if (!value) return null;
+    try {
+        const raw = Buffer.from(value, 'base64url');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', KEY_BUFFER, raw.subarray(0, 12));
+        decipher.setAuthTag(raw.subarray(12, 28));
+        return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
+    } catch {
+        return null;
+    }
+}
+
+module.exports = { encrypt, decrypt, seal, unseal };

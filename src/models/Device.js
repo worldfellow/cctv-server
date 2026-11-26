@@ -14,6 +14,13 @@ const Device = sequelize.define('Device', {
     rtspLink: {
         type: DataTypes.TEXT,
         allowNull: false
+    },
+    // FFmpeg -rtsp_transport value; see migrations/20261120-add-rtsp-transport-to-devices.js
+    rtspTransport: {
+        type: DataTypes.STRING(8),
+        allowNull: false,
+        defaultValue: 'tcp',
+        validate: { isIn: [['tcp', 'udp']] }
     }
 }, {
     tableName: 'Devices',

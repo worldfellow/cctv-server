@@ -209,6 +209,8 @@ router.get('/export/excel', authMiddleware, async (req, res) => {
             { header: 'Inactive', key: 'disabled', width: 10 },
             { header: 'Not Working For', key: 'downFor', width: 16 },
             { header: 'Last Checked', key: 'lastChecked', width: 20 },
+            { header: 'Mobile No', key: 'mobileNo', width: 16 },
+            { header: 'Camera Personnel Name', key: 'cameraPersonnelName', width: 26 },
             { header: 'Address', key: 'address', width: 40 },
             // { header: 'Contact Email', key: 'contactEmail', width: 30 }
         ];

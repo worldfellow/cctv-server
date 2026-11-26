@@ -5,6 +5,11 @@ const authMiddleware = require('../middleware/auth');
 const { Op } = require('sequelize');
 
 // Middleware to check if user has permission to perform a specific action
+const mobileRegex = /^\d{10}$/;
+
+// Excel may hand back the mobile as a number; normalise to a trimmed string
+const normalizeMobile = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
 const checkActionPermission = (action) => {
     return (req, res, next) => {
         if (req.user.role === 'SUPER_ADMIN') {
@@ -77,14 +82,18 @@ router.get('/template/download', authMiddleware, checkActionPermission('college_
         sheet.columns = [
             { header: 'College Name', key: 'name', width: 30 },
             { header: 'Address', key: 'address', width: 50 },
-            { header: 'Contact Email', key: 'contactEmail', width: 30 }
+            { header: 'Contact Email', key: 'contactEmail', width: 30 },
+            { header: 'Mobile No', key: 'mobileNo', width: 20 },
+            { header: 'Camera Personnel Name', key: 'cameraPersonnelName', width: 30 }
         ];
 
         // Add a sample row
         sheet.addRow({
             name: 'Sample Engineering College',
             address: '123 University Ave, Tech City, ST 12345',
-            contactEmail: 'contact@samplecollege.edu'
+            contactEmail: 'contact@samplecollege.edu',
+            mobileNo: '9876543210',
+            cameraPersonnelName: 'John Doe'
         });
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -122,9 +131,11 @@ router.post('/bulk-upload', authMiddleware, checkActionPermission('college_creat
             const name = row.getCell(1).value?.toString().trim();
             const address = row.getCell(2).value?.toString().trim();
             const contactEmail = row.getCell(3).value?.toString().trim();
+            const mobileNo = normalizeMobile(row.getCell(4).value);
+            const cameraPersonnelName = row.getCell(5).value?.toString().trim();
 
             // Skip entirely empty rows
-            if (!name && !address && !contactEmail) return;
+            if (!name && !address && !contactEmail && !mobileNo && !cameraPersonnelName) return;
 
             // Name is required based on the College model
             if (!name) {
@@ -138,10 +149,21 @@ router.post('/bulk-upload', authMiddleware, checkActionPermission('college_creat
                 return;
             }
 
+            if (!mobileNo) {
+                errors.push(`Row ${rowNumber}: Missing required field (Mobile No)`);
+                return;
+            }
+            if (!mobileRegex.test(mobileNo)) {
+                errors.push(`Row ${rowNumber}: Mobile No must be exactly 10 digits ('${mobileNo}')`);
+                return;
+            }
+
             collegesToCreate.push({
                 name,
                 address: address || null,
-                contactEmail: contactEmail || null
+                contactEmail: contactEmail || null,
+                mobileNo,
+                cameraPersonnelName: cameraPersonnelName || null
             });
         });
 
@@ -203,7 +225,9 @@ router.get('/bulk-export', authMiddleware, checkActionPermission('college_edit')
             { header: 'College Name', key: 'name', width: 30 },
             { header: 'Address', key: 'address', width: 50 },
             { header: 'Contact Email', key: 'contactEmail', width: 30 },
-            { header: 'Status', key: 'status', width: 15 }
+            { header: 'Status', key: 'status', width: 15 },
+            { header: 'Mobile No', key: 'mobileNo', width: 20 },
+            { header: 'Camera Personnel Name', key: 'cameraPersonnelName', width: 30 }
         ];
         sheet.getRow(1).font = { bold: true };
         sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
@@ -213,7 +237,9 @@ router.get('/bulk-export', authMiddleware, checkActionPermission('college_edit')
             name: c.name,
             address: c.address || '',
             contactEmail: c.contactEmail || '',
-            status: c.isActive ? 'Active' : 'Inactive'
+            status: c.isActive ? 'Active' : 'Inactive',
+            mobileNo: c.mobileNo || '',
+            cameraPersonnelName: c.cameraPersonnelName || ''
         }));
 
         // Lock the ID column visually and add a Status dropdown
@@ -265,8 +291,10 @@ router.post('/bulk-update', authMiddleware, checkActionPermission('college_edit'
             const address = cellText(row.getCell(3));
             const contactEmail = cellText(row.getCell(4));
             const status = cellText(row.getCell(5));
+            const mobileNo = cellText(row.getCell(6));
+            const cameraPersonnelName = cellText(row.getCell(7));
 
-            if (!id && !name && !address && !contactEmail && !status) return;
+            if (!id && !name && !address && !contactEmail && !status && !mobileNo && !cameraPersonnelName) return;
 
             if (!id) {
                 errors.push(`Row ${rowNumber}: Missing College ID (use Bulk Import to add new colleges)`);
@@ -290,6 +318,10 @@ router.post('/bulk-update', authMiddleware, checkActionPermission('college_edit'
                 errors.push(`Row ${rowNumber}: Invalid email format for '${contactEmail}'`);
                 return;
             }
+            if (!mobileRegex.test(mobileNo)) {
+                errors.push(`Row ${rowNumber}: Mobile No is required and must be exactly 10 digits`);
+                return;
+            }
             const statusLower = status.toLowerCase();
             if (status && statusLower !== 'active' && statusLower !== 'inactive') {
                 errors.push(`Row ${rowNumber}: Status must be 'Active' or 'Inactive'`);
@@ -299,7 +331,9 @@ router.post('/bulk-update', authMiddleware, checkActionPermission('college_edit'
             const data = {
                 name,
                 address: address || null,
-                contactEmail: contactEmail || null
+                contactEmail: contactEmail || null,
+                mobileNo,
+                cameraPersonnelName: cameraPersonnelName || null
             };
             if (status) data.isActive = statusLower === 'active';
             updates.push({ id, data });
@@ -376,8 +410,12 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // Create a college
 router.post('/', authMiddleware, checkActionPermission('college_create'), async (req, res) => {
     try {
-        const { name, address, contactEmail } = req.body;
-        const college = await College.create({ name, address, contactEmail });
+        const { name, address, contactEmail, cameraPersonnelName } = req.body;
+        const mobileNo = normalizeMobile(req.body.mobileNo);
+        if (!mobileRegex.test(mobileNo)) {
+            return res.status(400).json({ message: 'Mobile number is required and must be exactly 10 digits' });
+        }
+        const college = await College.create({ name, address, contactEmail, mobileNo, cameraPersonnelName });
         res.status(201).json(college);
     } catch (error) {
         if (error.name === 'SequelizeValidationError') {
@@ -394,8 +432,12 @@ router.put('/:id', authMiddleware, checkActionPermission('college_edit'), async 
         if (!college) {
             return res.status(404).json({ message: 'College not found' });
         }
-        const { name, address, contactEmail } = req.body;
-        await college.update({ name, address, contactEmail });
+        const { name, address, contactEmail, cameraPersonnelName } = req.body;
+        const mobileNo = normalizeMobile(req.body.mobileNo);
+        if (!mobileRegex.test(mobileNo)) {
+            return res.status(400).json({ message: 'Mobile number is required and must be exactly 10 digits' });
+        }
+        await college.update({ name, address, contactEmail, mobileNo, cameraPersonnelName });
         res.json(college);
     } catch (error) {
         res.status(500).json({ message: 'Error updating college' });

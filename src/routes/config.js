@@ -42,6 +42,18 @@ router.post('/', upload.single('logo'), async (req, res) => {
         const updateData = {};
         if (appName) updateData.appName = appName;
         if (footerText) updateData.footerText = footerText;
+        if (req.file && req.file.buffer && !req.file.filename) {
+            // Arrived through the encrypted gateway (no multer disk write): save it here, images only
+            const ext = path.extname(req.file.originalname).toLowerCase();
+            if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) {
+                return res.status(400).json({ error: 'Logo must be an image file' });
+            }
+            const baseDir = process.env.FILE_LOCATION || path.join(__dirname, '../../../uploads');
+            const logoDir = path.join(baseDir, 'config');
+            fs.mkdirSync(logoDir, { recursive: true });
+            req.file.filename = `logo_${Date.now()}${ext}`;
+            fs.writeFileSync(path.join(logoDir, req.file.filename), req.file.buffer);
+        }
         if (req.file) {
             updateData.logoUrl = `/uploads/config/${req.file.filename}`;
         }
