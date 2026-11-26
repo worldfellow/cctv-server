@@ -82,8 +82,8 @@ const buildRows = async (user, days) => {
     const windowStart = now - days * 86400000;
 
     const colleges = await College.findAll({
-        where: collegeScope(user),
-        attributes: ['id', 'name', 'address', 'contactEmail', 'isActive'],
+        where: { ...collegeScope(user), isActive: true }, // only colleges active for assessment
+        attributes: ['id', 'name', 'address', 'contactEmail', 'mobileNo', 'cameraPersonnelName', 'isActive'],
         order: [['name', 'ASC']],
         include: [{
             model: Camera,
@@ -149,6 +149,8 @@ const buildRows = async (user, days) => {
             name: college.name,
             address: college.address,
             contactEmail: college.contactEmail,
+            mobileNo: college.mobileNo,
+            cameraPersonnelName: college.cameraPersonnelName,
             isActive: college.isActive,
             status,
             totalCameras: college.Cameras.length,
@@ -226,7 +228,7 @@ const getCameraDetails = async (user, collegeIds, days) => {
         where: { collegeId: { [Op.in]: collegeIds } },
         attributes: ['id', 'collegeId', 'name', 'location', 'ipAddress', 'rtspPort', 'channel', 'isActive'],
         include: [
-            { model: College, attributes: ['name', 'isActive'] },
+            { model: College, attributes: ['name', 'isActive'], where: { isActive: true } }, // only colleges active for assessment
             { model: Device, attributes: ['deviceName'], required: false },
             { model: CameraHealth, required: false }
         ],

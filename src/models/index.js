@@ -39,6 +39,16 @@ const initDb = async () => {
             console.log('Migration check skipped for Colleges (table may not exist yet).');
         }
 
+        // One-time migration: add rtspTransport column to Devices
+        try {
+            const addRtspTransport = require('../migrations/20261120-add-rtsp-transport-to-devices');
+            if (await addRtspTransport.up(sequelize)) {
+                console.log('Migration: Added rtspTransport column to Devices table.');
+            }
+        } catch (migrationError) {
+            console.log('Migration check skipped for Devices (table may not exist yet).');
+        }
+
         // Sync models (creates tables if they don't exist, and updates schema)
         await sequelize.sync({ alter: true });
         console.log('Database synchronized.');

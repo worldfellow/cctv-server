@@ -9,6 +9,19 @@ const multer = require('multer');
 const streamManager = require('../services/streamManager');
 const { collegeLabel, buildCollegeLookup } = require('../utils/collegeLabel');
 
+// Camera credentials never leave the server in list/detail/save responses.
+// Users see a masked username; the password is replaced by a hasPassword flag.
+// Authorised users can fetch the real values on demand via GET /:id/credentials (audited).
+const maskUsername = (value) => value ? `${value[0]}${'•'.repeat(4)}` : '';
+const maskCredentials = (data, rawUsername, rawPassword) => {
+    data.username = maskUsername(rawUsername);
+    data.password = '';
+    data.hasPassword = !!rawPassword;
+    return data;
+};
+const canRevealCredentials = (user) =>
+    user.role === 'SUPER_ADMIN' || !!(user.permissions && Array.isArray(user.permissions.actions) && user.permissions.actions.includes('camera_edit'));
+
 // Configure multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -36,10 +49,7 @@ router.post('/', authMiddleware, async (req, res) => {
             deviceId: deviceId || null
         });
 
-        // Send back unencrypted credentials for the UI
-        const cameraResponse = camera.toJSON();
-        cameraResponse.username = username || '';
-        cameraResponse.password = password || '';
+        const cameraResponse = maskCredentials(camera.toJSON(), username, password);
 
         res.status(201).json(cameraResponse);
     } catch (error) {
@@ -616,6 +626,12 @@ router.get('/', authMiddleware, async (req, res) => {
             whereClause.collegeId = collegeId;
         }
 
+        // Optional multi-select device type filter (comma-separated device ids)
+        const deviceIds = String(req.query.deviceIds || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (deviceIds.length > 0) {
+            whereClause.deviceId = { [Op.in]: deviceIds };
+        }
+
         // Apply restrictions for non-SUPER_ADMIN users
         if (req.user.role !== 'SUPER_ADMIN' && !req.user.allowedColleges.includes('ALL')) {
             const allowed = req.user.allowedColleges || [];
@@ -660,8 +676,9 @@ router.get('/', authMiddleware, async (req, res) => {
                 collegeAddress: camera.College ? camera.College.address : null,
                 deviceId: camera.deviceId,
                 deviceName: camera.Device ? camera.Device.deviceName : null,
-                username: rawUsername,
-                password: rawPassword,
+                username: maskUsername(rawUsername),
+                password: '',
+                hasPassword: !!rawPassword,
                 createdAt: camera.createdAt,
                 updatedAt: camera.updatedAt
             };
@@ -725,6 +742,29 @@ router.post('/:id/start-stream', authMiddleware, async (req, res) => {
     }
 });
 
+// Reveal a camera's real credentials (permission-gated and logged)
+router.get('/:id/credentials', authMiddleware, async (req, res) => {
+    try {
+        if (!canRevealCredentials(req.user)) {
+            return res.status(403).json({ message: 'You do not have permission to view camera credentials' });
+        }
+        const camera = await Camera.findByPk(req.params.id, { attributes: ['id', 'name', 'collegeId', 'username', 'password'] });
+        if (!camera) return res.status(404).json({ message: 'Camera not found' });
+
+        if (req.user.role !== 'SUPER_ADMIN' && !(req.user.allowedColleges || []).includes('ALL')
+            && !(req.user.allowedColleges || []).includes(camera.collegeId)) {
+            return res.status(403).json({ message: 'Access denied to this college' });
+        }
+
+        console.log(`[AUDIT] ${new Date().toISOString()} ${req.user.email} (${req.user.role}) revealed credentials of camera ${camera.id} "${camera.name}" from ${req.ip}`);
+        res.set('Cache-Control', 'no-store');
+        res.json({ username: decrypt(camera.username) || '', password: decrypt(camera.password) || '' });
+    } catch (error) {
+        console.error('Error revealing camera credentials:', error);
+        res.status(500).json({ message: 'Error fetching credentials' });
+    }
+});
+
 // Get a single camera
 router.get('/:id', authMiddleware, async (req, res) => {
     try {
@@ -757,8 +797,9 @@ router.get('/:id', authMiddleware, async (req, res) => {
             collegeAddress: camera.College ? camera.College.address : null,
             deviceId: camera.deviceId,
             deviceName: camera.Device ? camera.Device.deviceName : null,
-            username: rawUsername,
-            password: rawPassword,
+            username: maskUsername(rawUsername),
+            password: '',
+            hasPassword: !!rawPassword,
             createdAt: camera.createdAt,
             updatedAt: camera.updatedAt
         };
@@ -794,9 +835,11 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
         await camera.update(updateData);
 
-        const cameraResponse = camera.toJSON();
-        cameraResponse.username = username !== undefined ? username : (decrypt(camera.username) || '');
-        cameraResponse.password = password !== undefined ? password : (decrypt(camera.password) || '');
+        const cameraResponse = maskCredentials(
+            camera.toJSON(),
+            username !== undefined ? username : decrypt(camera.username),
+            password !== undefined ? password : decrypt(camera.password)
+        );
 
         res.json(cameraResponse);
     } catch (error) {
