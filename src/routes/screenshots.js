@@ -125,6 +125,35 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 });
 
+// Authenticated image download. The file is looked up by screenshot id (never by a client-supplied path),
+// and the user must have access to the screenshot's college.
+router.get('/file/:id', authMiddleware, async (req, res) => {
+    try {
+        const screenshot = await Screenshot.findByPk(req.params.id);
+        if (!screenshot) return res.status(404).json({ error: 'Screenshot not found' });
+
+        if (req.user.role !== 'SUPER_ADMIN' && !(req.user.allowedColleges || []).includes('ALL')) {
+            const { College } = require('../models');
+            const { Op } = require('sequelize');
+            const allowed = await College.findAll({ where: { id: { [Op.in]: req.user.allowedColleges || [] } }, attributes: ['name'] });
+            if (!allowed.map(c => c.name).includes(screenshot.collegeName)) {
+                return res.status(403).json({ error: 'Access denied to this college' });
+            }
+        }
+
+        const relativePath = screenshot.imageUrl.replace('/uploads/screenshots/', '');
+        const filePath = path.resolve(uploadDir, relativePath);
+        if (!filePath.startsWith(path.resolve(uploadDir) + path.sep) || !fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        res.set('Cache-Control', 'private, no-store');
+        res.type('png').sendFile(filePath);
+    } catch (error) {
+        console.error('Error serving screenshot:', error);
+        res.status(500).json({ error: 'Failed to load screenshot' });
+    }
+});
+
 router.post('/delete', authMiddleware, async (req, res) => {
     try {
         const { ids } = req.body;

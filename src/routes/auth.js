@@ -3,11 +3,13 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const { User, College } = require('../models');
+const crypto = require('crypto');
+const { seal, unseal } = require('../utils/crypto');
 const router = express.Router();
 
 // The refresh token lives only in an HttpOnly cookie: JavaScript in the browser (and so XSS) can never read it.
 const REFRESH_COOKIE = 'cctv_rt';
-const COOKIE_PATH = '/api/auth';
+const COOKIE_PATH = '/api'; // requests travel through /api/gw, so the cookie must cover all of /api
 
 const readCookie = (req, name) => {
     const header = req.headers.cookie;
@@ -15,7 +17,7 @@ const readCookie = (req, name) => {
     for (const part of header.split(';')) {
         const idx = part.indexOf('=');
         if (idx > 0 && part.slice(0, idx).trim() === name) {
-            try { return decodeURIComponent(part.slice(idx + 1).trim()); } catch { return null; }
+            try { return unseal(decodeURIComponent(part.slice(idx + 1).trim())); } catch { return null; }
         }
     }
     return null;
@@ -30,9 +32,22 @@ const cookieOptions = (req, maxAgeMs) => ({
     ...(maxAgeMs > 0 ? { maxAge: maxAgeMs } : {})
 });
 
+// The cookie is bound to the browser that logged in: a stolen cookie replayed from another
+// User-Agent is rejected. (Keycloak already rotates the refresh token on every refresh.)
+const uaHash = (req) => crypto.createHash('sha256').update(req.headers['user-agent'] || '').digest('hex').slice(0, 16);
+
+const readRefreshToken = (req) => {
+    const raw = readCookie(req, REFRESH_COOKIE);
+    if (!raw) return null;
+    try {
+        const { t, ua } = JSON.parse(raw);
+        return t && ua === uaHash(req) ? t : null;
+    } catch { return null; }
+};
+
 const setRefreshCookie = (req, res, data) => {
     if (!data.refresh_token) return;
-    res.cookie(REFRESH_COOKIE, data.refresh_token, cookieOptions(req, (data.refresh_expires_in || 0) * 1000));
+    res.cookie(REFRESH_COOKIE, seal(JSON.stringify({ t: data.refresh_token, ua: uaHash(req) })), cookieOptions(req, (data.refresh_expires_in || 0) * 1000));
 };
 
 const clearRefreshCookie = (req, res) => {
@@ -41,7 +56,7 @@ const clearRefreshCookie = (req, res) => {
 
 // Keycloak login proxy: the browser never talks to Keycloak's token endpoint.
 // The server performs the grant with the confidential client's secret.
-router.post('/keycloak-login', async (req, res) => {
+router.post('/x7Kq2mVd9RtLw4Ze', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
         return res.status(400).json({ error: 'invalid_request', message: 'Email and password are required' });
@@ -97,7 +112,7 @@ const keycloakOidcUrl = (endpoint) =>
 // Refresh: swap a refresh token for a new access token (+ rotated refresh token).
 // Same proxy pattern as login, so the client secret never reaches the browser.
 router.post('/refresh', async (req, res) => {
-    const refreshToken = readCookie(req, REFRESH_COOKIE);
+    const refreshToken = readRefreshToken(req);
     if (!refreshToken) {
         return res.status(401).json({ error: 'invalid_grant', error_description: 'No session' });
     }
@@ -141,7 +156,7 @@ router.post('/refresh', async (req, res) => {
 
 // Logout: end the Keycloak session so the refresh token can no longer be used
 router.post('/logout', async (req, res) => {
-    const refreshToken = readCookie(req, REFRESH_COOKIE);
+    const refreshToken = readRefreshToken(req);
     clearRefreshCookie(req, res);
     if (!refreshToken || !process.env.KEYCLOAK_CLIENT_SECRET) return res.status(204).end();
 

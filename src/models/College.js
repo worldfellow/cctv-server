@@ -22,6 +22,18 @@ const College = sequelize.define('College', {
             isEmail: true
         }
     },
+    // Required (enforced in the routes; column stays nullable so existing rows can migrate)
+    mobileNo: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+        validate: {
+            is: { args: /^\d{10}$/, msg: 'Mobile number must be exactly 10 digits' }
+        }
+    },
+    cameraPersonnelName: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
     isActive: {
         type: DataTypes.BOOLEAN,
         defaultValue: true
