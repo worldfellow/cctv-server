@@ -1,3 +1,5 @@
+// Load .env before anything else: middleware/utils read keys (RESPONSE_ENCRYPTION_KEY, ENCRYPTION_KEY) when required
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -6,7 +8,6 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const requestGateway = require('./middleware/requestGateway');
 const responseEncryption = require('./middleware/responseEncryption');
-const dotenv = require('dotenv');
 const { initDb } = require('./models');
 const authRoutes = require('./routes/auth');
 const feedRoutes = require('./routes/feeds');
@@ -21,7 +22,11 @@ const connectivityRoutes = require('./routes/connectivity');
 const streamManager = require('./services/streamManager');
 const healthMonitor = require('./services/healthMonitor.service');
 
-dotenv.config();
+// Refuse to run in production with the built-in fallback key (it would never match the client)
+if (process.env.NODE_ENV === 'production' && !process.env.RESPONSE_ENCRYPTION_KEY) {
+    console.error('RESPONSE_ENCRYPTION_KEY is not set; refusing to start.');
+    process.exit(1);
+}
 
 // Initialize Database
 // Background camera connectivity checks start once the database is ready
